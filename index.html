@@ -345,6 +345,198 @@
             opacity: 0.5;
         }
 
+        /* Auth */
+        .auth-bar {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .auth-bar .user-email {
+            font-size: 0.85rem;
+            color: #888;
+        }
+
+        .auth-btn {
+            padding: 8px 20px;
+            border: 1px solid #e63946;
+            border-radius: 8px;
+            background: transparent;
+            color: #e63946;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .auth-btn:hover {
+            background: #e63946;
+            color: #fff;
+        }
+
+        .auth-btn.primary {
+            background: #e63946;
+            color: #fff;
+        }
+
+        .auth-btn.primary:hover {
+            background: #c1222f;
+        }
+
+        .auth-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.85);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .auth-modal.active {
+            display: flex;
+        }
+
+        .auth-modal-content {
+            background: #141414;
+            border: 1px solid #222;
+            border-radius: 16px;
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .auth-modal-content h2 {
+            font-size: 1.4rem;
+            margin-bottom: 8px;
+        }
+
+        .auth-modal-content .subtitle {
+            color: #666;
+            font-size: 0.9rem;
+            margin-bottom: 28px;
+        }
+
+        .auth-modal-content .form-group {
+            margin-bottom: 16px;
+        }
+
+        .auth-modal-content label {
+            display: block;
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .auth-modal-content input[type="email"],
+        .auth-modal-content input[type="password"] {
+            width: 100%;
+            padding: 12px 16px;
+            font-size: 1rem;
+            border: 2px solid #333;
+            border-radius: 10px;
+            background: #0a0a0a;
+            color: #fff;
+            transition: border-color 0.2s;
+        }
+
+        .auth-modal-content input:focus {
+            outline: none;
+            border-color: #e63946;
+        }
+
+        .auth-modal-content .auth-submit {
+            width: 100%;
+            padding: 14px;
+            background: #e63946;
+            border: none;
+            border-radius: 10px;
+            color: #fff;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 8px;
+            transition: opacity 0.2s;
+        }
+
+        .auth-modal-content .auth-submit:hover {
+            opacity: 0.9;
+        }
+
+        .auth-modal-content .auth-submit:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .auth-modal-content .auth-toggle {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.85rem;
+            color: #666;
+        }
+
+        .auth-modal-content .auth-toggle a {
+            color: #e63946;
+            cursor: pointer;
+            text-decoration: none;
+        }
+
+        .auth-modal-content .auth-toggle a:hover {
+            text-decoration: underline;
+        }
+
+        .auth-modal-content .auth-error {
+            background: rgba(230, 57, 70, 0.1);
+            border: 1px solid rgba(230, 57, 70, 0.3);
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: #e63946;
+            font-size: 0.85rem;
+            margin-bottom: 16px;
+            display: none;
+        }
+
+        .auth-modal-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: none;
+            border: none;
+            color: #666;
+            font-size: 28px;
+            cursor: pointer;
+        }
+
+        .auth-modal-close:hover {
+            color: #fff;
+        }
+
+        .download-login-prompt {
+            text-align: center;
+            font-size: 0.85rem;
+            color: #888;
+            margin-top: 8px;
+        }
+
+        .download-login-prompt a {
+            color: #e63946;
+            cursor: pointer;
+            text-decoration: none;
+        }
+
+        .download-login-prompt a:hover {
+            text-decoration: underline;
+        }
+
         @media (max-width: 600px) {
             .video-grid {
                 grid-template-columns: repeat(2, 1fr);
@@ -360,10 +552,21 @@
                 max-height: 90vh;
                 overflow-y: auto;
             }
+
+            .auth-modal-content {
+                margin: 20px;
+                padding: 28px;
+            }
         }
     </style>
 </head>
 <body>
+    <div class="auth-bar" id="authBar">
+        <span class="user-email" id="userEmail" style="display: none;"></span>
+        <button class="auth-btn" id="authLogoutBtn" style="display: none;" onclick="logout()">Log Out</button>
+        <button class="auth-btn primary" id="authLoginBtn" onclick="showAuthModal('login')">Log In</button>
+    </div>
+
     <div class="container">
         <header>
             <img src="jcam-logo.png" alt="j.cam" class="logo">
@@ -397,14 +600,40 @@
                 <h3 id="modalKeyword"></h3>
                 <p class="description" id="modalDescription"></p>
                 <div class="hashtags" id="modalHashtags"></div>
-                <button class="download-btn" id="downloadBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="7 10 12 15 17 10"></polyline>
-                        <line x1="12" y1="15" x2="12" y2="3"></line>
-                    </svg>
-                    Download Video
-                </button>
+                <div id="downloadArea">
+                    <button class="download-btn" id="downloadBtn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Download Video
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auth Modal -->
+    <div class="auth-modal" id="authModal">
+        <div class="auth-modal-content" style="position: relative;">
+            <button class="auth-modal-close" id="authModalClose">&times;</button>
+            <h2 id="authModalTitle">Log In</h2>
+            <p class="subtitle" id="authModalSubtitle">Sign in to download videos</p>
+            <div class="auth-error" id="authError"></div>
+            <form id="authForm" onsubmit="handleAuth(event)">
+                <div class="form-group">
+                    <label for="authEmail">Email</label>
+                    <input type="email" id="authEmail" required placeholder="you@example.com">
+                </div>
+                <div class="form-group">
+                    <label for="authPassword">Password</label>
+                    <input type="password" id="authPassword" required placeholder="••••••••" minlength="6">
+                </div>
+                <button type="submit" class="auth-submit" id="authSubmit">Log In</button>
+            </form>
+            <div class="auth-toggle" id="authToggle">
+                Don't have an account? <a onclick="showAuthModal('signup')">Sign Up</a>
             </div>
         </div>
     </div>
@@ -417,10 +646,160 @@
 
         let allVideos = [];
         let currentVideo = null;
+        let currentUser = null;
+        let authMode = 'login';
+
+        // --- Auth ---
+
+        function updateAuthUI() {
+            const loginBtn = document.getElementById('authLoginBtn');
+            const logoutBtn = document.getElementById('authLogoutBtn');
+            const emailEl = document.getElementById('userEmail');
+
+            if (currentUser) {
+                loginBtn.style.display = 'none';
+                logoutBtn.style.display = '';
+                emailEl.style.display = '';
+                emailEl.textContent = currentUser.email;
+            } else {
+                loginBtn.style.display = '';
+                logoutBtn.style.display = 'none';
+                emailEl.style.display = 'none';
+                emailEl.textContent = '';
+            }
+
+            updateDownloadArea();
+        }
+
+        function updateDownloadArea() {
+            const area = document.getElementById('downloadArea');
+            if (!area) return;
+
+            if (currentUser) {
+                area.innerHTML = `
+                    <button class="download-btn" id="downloadBtn" onclick="downloadVideo()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Download Video
+                    </button>
+                `;
+            } else {
+                area.innerHTML = `
+                    <button class="download-btn" style="opacity: 0.5; cursor: default;" disabled>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Download Video
+                    </button>
+                    <p class="download-login-prompt">
+                        <a onclick="showAuthModal('login')">Log in</a> to download videos
+                    </p>
+                `;
+            }
+        }
+
+        function showAuthModal(mode) {
+            authMode = mode;
+            const title = document.getElementById('authModalTitle');
+            const subtitle = document.getElementById('authModalSubtitle');
+            const submit = document.getElementById('authSubmit');
+            const toggle = document.getElementById('authToggle');
+            const errEl = document.getElementById('authError');
+            errEl.style.display = 'none';
+
+            if (mode === 'signup') {
+                title.textContent = 'Create Account';
+                subtitle.textContent = 'Sign up to download videos';
+                submit.textContent = 'Create Account';
+                toggle.innerHTML = 'Already have an account? <a onclick="showAuthModal(\'login\')">Log In</a>';
+            } else {
+                title.textContent = 'Log In';
+                subtitle.textContent = 'Sign in to download videos';
+                submit.textContent = 'Log In';
+                toggle.innerHTML = 'Don\'t have an account? <a onclick="showAuthModal(\'signup\')">Sign Up</a>';
+            }
+
+            document.getElementById('authModal').classList.add('active');
+        }
+
+        function closeAuthModal() {
+            document.getElementById('authModal').classList.remove('active');
+            document.getElementById('authForm').reset();
+            document.getElementById('authError').style.display = 'none';
+        }
+
+        async function handleAuth(e) {
+            e.preventDefault();
+            const email = document.getElementById('authEmail').value;
+            const password = document.getElementById('authPassword').value;
+            const submit = document.getElementById('authSubmit');
+            const errEl = document.getElementById('authError');
+
+            submit.disabled = true;
+            submit.textContent = authMode === 'signup' ? 'Creating account...' : 'Logging in...';
+            errEl.style.display = 'none';
+
+            let result;
+            if (authMode === 'signup') {
+                result = await db.auth.signUp({ email, password });
+            } else {
+                result = await db.auth.signInWithPassword({ email, password });
+            }
+
+            if (result.error) {
+                errEl.textContent = result.error.message;
+                errEl.style.display = 'block';
+                submit.disabled = false;
+                submit.textContent = authMode === 'signup' ? 'Create Account' : 'Log In';
+                return;
+            }
+
+            if (authMode === 'signup' && !result.data.session) {
+                errEl.textContent = 'Check your email to confirm your account, then log in.';
+                errEl.style.display = 'block';
+                errEl.style.background = 'rgba(34,197,94,0.1)';
+                errEl.style.borderColor = 'rgba(34,197,94,0.3)';
+                errEl.style.color = '#22c55e';
+                submit.disabled = false;
+                submit.textContent = 'Create Account';
+                return;
+            }
+
+            currentUser = result.data.user;
+            closeAuthModal();
+            updateAuthUI();
+        }
+
+        async function logout() {
+            await db.auth.signOut();
+            currentUser = null;
+            updateAuthUI();
+        }
+
+        async function initAuth() {
+            try {
+                const { data: { session } } = await db.auth.getSession();
+                currentUser = session?.user || null;
+            } catch (e) {
+                console.error('Auth init error:', e);
+                currentUser = null;
+            }
+            updateAuthUI();
+
+            db.auth.onAuthStateChange((_event, session) => {
+                currentUser = session?.user || null;
+                updateAuthUI();
+            });
+        }
+
+        // --- Videos ---
 
         async function loadVideos() {
-            console.log('Loading videos...');
-            
             const { data, error } = await db
                 .from('logod_videos')
                 .select(`
@@ -442,8 +821,6 @@
                 .is('downloaded_at', null)
                 .order('created_at', { ascending: false });
 
-            console.log('Query result:', { data, error });
-
             if (error) {
                 console.error('Error loading videos:', error);
                 document.getElementById('videoGrid').innerHTML = `
@@ -456,7 +833,6 @@
             }
 
             allVideos = data || [];
-            console.log('Loaded', allVideos.length, 'videos');
             renderVideos(allVideos);
         }
 
@@ -544,6 +920,8 @@
             const hashtags = v.tiktok_hashtags || [];
             hashtagsEl.innerHTML = hashtags.map(tag => `<span class="hashtag">#${tag}</span>`).join('');
 
+            updateDownloadArea();
+
             const videoEl = document.getElementById('modalVideo');
             const playbackUrl = video.mux_playback_url;
 
@@ -575,7 +953,7 @@
         }
 
         async function downloadVideo() {
-            if (!currentVideo) return;
+            if (!currentVideo || !currentUser) return;
 
             const btn = document.getElementById('downloadBtn');
             btn.disabled = true;
@@ -623,7 +1001,8 @@
             }
         }
 
-        // Event listeners
+        // --- Event listeners ---
+
         document.getElementById('searchInput').addEventListener('input', (e) => {
             filterVideos(e.target.value);
         });
@@ -632,13 +1011,22 @@
         document.getElementById('modal').addEventListener('click', (e) => {
             if (e.target === e.currentTarget) closeModal();
         });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeModal();
+
+        document.getElementById('authModalClose').addEventListener('click', closeAuthModal);
+        document.getElementById('authModal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeAuthModal();
         });
 
-        document.getElementById('downloadBtn').addEventListener('click', downloadVideo);
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+                closeAuthModal();
+            }
+        });
 
-        // Load videos on page load
+        // --- Init ---
+
+        initAuth();
         loadVideos();
     </script>
 </body>
