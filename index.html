@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>j.cam Video Library</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            text-align: center;
+            padding: 40px 20px;
+            border-bottom: 1px solid #222;
+            margin-bottom: 30px;
+        }
+
+        header .logo {
+            max-width: 200px;
+            height: auto;
+            margin-bottom: 16px;
+        }
+
+        header h2 {
+            font-size: 1.2rem;
+            font-weight: 500;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .search-container {
+            max-width: 600px;
+            margin: 0 auto 40px;
+            position: relative;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 16px 20px 16px 50px;
+            font-size: 1rem;
+            border: 2px solid #333;
+            border-radius: 12px;
+            background: #111;
+            color: #fff;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #e63946;
+            box-shadow: 0 0 0 3px rgba(230, 57, 70, 0.2);
+        }
+
+        .search-input::placeholder {
+            color: #666;
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 18px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #666;
+        }
+
+        .stats {
+            text-align: center;
+            color: #666;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+        }
+
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .video-card {
+            position: relative;
+            aspect-ratio: 9/16;
+            border-radius: 12px;
+            overflow: hidden;
+            cursor: pointer;
+            background: #1a1a1a;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .video-card:hover {
+            transform: scale(1.03);
+            box-shadow: 0 8px 30px rgba(230, 57, 70, 0.3);
+        }
+
+        .video-card img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: opacity 0.3s;
+        }
+
+        .video-card img.gif-preview {
+            position: absolute;
+            top: 0;
+            left: 0;
+            opacity: 0;
+        }
+
+        .video-card:hover img.gif-preview {
+            opacity: 1;
+        }
+
+        .video-card:hover img.thumbnail {
+            opacity: 0;
+        }
+
+        .video-card .overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 60px 12px 12px;
+            background: linear-gradient(transparent, rgba(0,0,0,0.9));
+        }
+
+        .video-card .category {
+            display: inline-block;
+            padding: 4px 8px;
+            background: rgba(230, 57, 70, 0.9);
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .video-card .keyword {
+            font-size: 0.8rem;
+            color: #ccc;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .video-card .play-icon {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 60px;
+            height: 60px;
+            background: rgba(255,255,255,0.9);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .video-card:hover .play-icon {
+            opacity: 1;
+        }
+
+        .play-icon svg {
+            width: 24px;
+            height: 24px;
+            fill: #0a0a0a;
+            margin-left: 4px;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.95);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            position: relative;
+            max-height: calc(100vh - 80px);
+            max-width: calc((100vh - 80px) * 9 / 16 + 0px);
+            width: 100%;
+            background: #111;
+            border-radius: 16px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 40px;
+            height: 40px;
+            background: rgba(0,0,0,0.6);
+            border: none;
+            border-radius: 50%;
+            color: #fff;
+            font-size: 24px;
+            cursor: pointer;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .modal-close:hover {
+            background: rgba(0,0,0,0.8);
+        }
+
+        .modal-video {
+            width: 100%;
+            flex: 1;
+            min-height: 0;
+            background: #000;
+        }
+
+        .modal-info {
+            padding: 20px;
+            flex-shrink: 0;
+            overflow-y: auto;
+            max-height: 200px;
+        }
+
+        .modal-info h3 {
+            font-size: 1rem;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+
+        .modal-info .description {
+            font-size: 0.9rem;
+            color: #888;
+            margin-bottom: 16px;
+            line-height: 1.5;
+            max-height: 80px;
+            overflow-y: auto;
+        }
+
+        .modal-info .hashtags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 16px;
+        }
+
+        .modal-info .hashtag {
+            padding: 4px 10px;
+            background: #222;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            color: #e63946;
+        }
+
+        .download-btn {
+            width: 100%;
+            padding: 14px;
+            background: #e63946;
+            border: none;
+            border-radius: 10px;
+            color: #fff;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .download-btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .download-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 60px;
+            color: #666;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #333;
+            border-top-color: #e63946;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 80px 20px;
+            color: #666;
+        }
+
+        .empty-state svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        @media (max-width: 600px) {
+            .video-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+
+            header h1 {
+                font-size: 1.8rem;
+            }
+
+            .modal-content {
+                max-width: 100%;
+                max-height: 90vh;
+                overflow-y: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <img src="jcam-logo.png" alt="j.cam" class="logo">
+            <h2>Video Library</h2>
+        </header>
+
+        <div class="search-container">
+            <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <path d="m21 21-4.35-4.35"></path>
+            </svg>
+            <input type="text" class="search-input" id="searchInput" placeholder="Search by description, keyword, category, or hashtag...">
+        </div>
+
+        <div class="stats" id="stats"></div>
+
+        <div id="videoGrid" class="video-grid">
+            <div class="loading">
+                <div class="loading-spinner"></div>
+                <p>Loading videos...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal" id="modal">
+        <div class="modal-content">
+            <button class="modal-close" id="modalClose">&times;</button>
+            <video class="modal-video" id="modalVideo" controls playsinline></video>
+            <div class="modal-info">
+                <h3 id="modalKeyword"></h3>
+                <p class="description" id="modalDescription"></p>
+                <div class="hashtags" id="modalHashtags"></div>
+                <button class="download-btn" id="downloadBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Download Video
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SUPABASE_URL = 'https://rruysunaautzvyyquuoh.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJydXlzdW5hYXV0enZ5eXF1dW9oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0MjcxMTcsImV4cCI6MjA5MzAwMzExN30.Syi1wRn_T5waa1UVl7C22IMyI2QukHb9uhx1QXsKqIQ';
+
+        const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        let allVideos = [];
+        let currentVideo = null;
+
+        async function loadVideos() {
+            console.log('Loading videos...');
+            
+            const { data, error } = await db
+                .from('logod_videos')
+                .select(`
+                    id,
+                    mux_playback_id,
+                    mux_thumbnail_url,
+                    mux_playback_url,
+                    mux_gif_url,
+                    status,
+                    video_id,
+                    videos (
+                        tiktok_description,
+                        tiktok_hashtags,
+                        search_keyword,
+                        category
+                    )
+                `)
+                .eq('status', 'ready')
+                .is('downloaded_at', null)
+                .order('created_at', { ascending: false });
+
+            console.log('Query result:', { data, error });
+
+            if (error) {
+                console.error('Error loading videos:', error);
+                document.getElementById('videoGrid').innerHTML = `
+                    <div class="empty-state" style="grid-column: 1 / -1;">
+                        <p>Error loading videos: ${error.message}</p>
+                        <p style="font-size: 0.8rem; margin-top: 10px;">${error.hint || ''}</p>
+                    </div>
+                `;
+                return;
+            }
+
+            allVideos = data || [];
+            console.log('Loaded', allVideos.length, 'videos');
+            renderVideos(allVideos);
+        }
+
+        function renderVideos(videos) {
+            const grid = document.getElementById('videoGrid');
+            const stats = document.getElementById('stats');
+
+            stats.textContent = `${videos.length} video${videos.length !== 1 ? 's' : ''} found`;
+
+            if (videos.length === 0) {
+                grid.innerHTML = `
+                    <div class="empty-state" style="grid-column: 1 / -1;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+                            <line x1="7" y1="2" x2="7" y2="22"></line>
+                            <line x1="17" y1="2" x2="17" y2="22"></line>
+                            <line x1="2" y1="12" x2="22" y2="12"></line>
+                            <line x1="2" y1="7" x2="7" y2="7"></line>
+                            <line x1="2" y1="17" x2="7" y2="17"></line>
+                            <line x1="17" y1="17" x2="22" y2="17"></line>
+                            <line x1="17" y1="7" x2="22" y2="7"></line>
+                        </svg>
+                        <p>No videos found</p>
+                    </div>
+                `;
+                return;
+            }
+
+            grid.innerHTML = videos.map(video => {
+                const v = video.videos || {};
+                return `
+                    <div class="video-card" data-id="${video.id}">
+                        <img class="thumbnail" src="${video.mux_thumbnail_url}" alt="${v.search_keyword || 'Video'}" loading="lazy">
+                        <img class="gif-preview" src="${video.mux_gif_url}" alt="" loading="lazy">
+                        <div class="overlay">
+                            ${v.category ? `<span class="category">${v.category}</span>` : ''}
+                            <div class="keyword">${v.search_keyword || ''}</div>
+                        </div>
+                        <div class="play-icon">
+                            <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            grid.querySelectorAll('.video-card').forEach(card => {
+                card.addEventListener('click', () => openModal(card.dataset.id));
+            });
+        }
+
+        function filterVideos(query) {
+            if (!query.trim()) {
+                renderVideos(allVideos);
+                return;
+            }
+
+            const q = query.toLowerCase();
+            const filtered = allVideos.filter(video => {
+                const v = video.videos || {};
+                const description = (v.tiktok_description || '').toLowerCase();
+                const keyword = (v.search_keyword || '').toLowerCase();
+                const category = (v.category || '').toLowerCase();
+                const hashtags = (v.tiktok_hashtags || []).join(' ').toLowerCase();
+
+                return description.includes(q) ||
+                       keyword.includes(q) ||
+                       category.includes(q) ||
+                       hashtags.includes(q);
+            });
+
+            renderVideos(filtered);
+        }
+
+        function openModal(videoId) {
+            const video = allVideos.find(v => v.id === videoId);
+            if (!video) return;
+
+            currentVideo = video;
+            const v = video.videos || {};
+
+            document.getElementById('modalKeyword').textContent = v.search_keyword || 'Video';
+            document.getElementById('modalDescription').textContent = v.tiktok_description || 'No description';
+
+            const hashtagsEl = document.getElementById('modalHashtags');
+            const hashtags = v.tiktok_hashtags || [];
+            hashtagsEl.innerHTML = hashtags.map(tag => `<span class="hashtag">#${tag}</span>`).join('');
+
+            const videoEl = document.getElementById('modalVideo');
+            const playbackUrl = video.mux_playback_url;
+
+            if (Hls.isSupported()) {
+                const hls = new Hls();
+                hls.loadSource(playbackUrl);
+                hls.attachMedia(videoEl);
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    videoEl.play();
+                });
+            } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+                videoEl.src = playbackUrl;
+                videoEl.addEventListener('loadedmetadata', () => {
+                    videoEl.play();
+                });
+            }
+
+            document.getElementById('modal').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeModal() {
+            const videoEl = document.getElementById('modalVideo');
+            videoEl.pause();
+            videoEl.src = '';
+            document.getElementById('modal').classList.remove('active');
+            document.body.style.overflow = '';
+            currentVideo = null;
+        }
+
+        async function downloadVideo() {
+            if (!currentVideo) return;
+
+            const btn = document.getElementById('downloadBtn');
+            btn.disabled = true;
+            btn.innerHTML = `
+                <div class="loading-spinner" style="width: 20px; height: 20px; margin: 0;"></div>
+                Preparing download...
+            `;
+
+            try {
+                const mp4Url = `https://stream.mux.com/${currentVideo.mux_playback_id}/high.mp4`;
+                
+                const response = await fetch(mp4Url);
+                const blob = await response.blob();
+                
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${currentVideo.videos?.search_keyword || 'video'}_${currentVideo.id.slice(0, 8)}.mp4`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+
+                await db
+                    .from('logod_videos')
+                    .update({ downloaded_at: new Date().toISOString() })
+                    .eq('id', currentVideo.id);
+
+                allVideos = allVideos.filter(v => v.id !== currentVideo.id);
+                filterVideos(document.getElementById('searchInput').value);
+                closeModal();
+            } catch (error) {
+                console.error('Download error:', error);
+                alert('Download failed. Please try again.');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Download Video
+                `;
+            }
+        }
+
+        // Event listeners
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+            filterVideos(e.target.value);
+        });
+
+        document.getElementById('modalClose').addEventListener('click', closeModal);
+        document.getElementById('modal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeModal();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeModal();
+        });
+
+        document.getElementById('downloadBtn').addEventListener('click', downloadVideo);
+
+        // Load videos on page load
+        loadVideos();
+    </script>
+</body>
+</html>
