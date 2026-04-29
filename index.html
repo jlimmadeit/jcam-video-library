@@ -641,6 +641,7 @@
     <script>
         const SUPABASE_URL = 'https://rruysunaautzvyyquuoh.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJydXlzdW5hYXV0enZ5eXF1dW9oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0MjcxMTcsImV4cCI6MjA5MzAwMzExN30.Syi1wRn_T5waa1UVl7C22IMyI2QukHb9uhx1QXsKqIQ';
+        const SEARCH_FUNCTION_URL = SUPABASE_URL + '/functions/v1/search-videos';
 
         const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -888,29 +889,89 @@
             });
         }
 
-        function filterVideos(query) {
-            if (!query.trim()) {
-                renderVideos(allVideos);
-                return;
-            }
+        let searchAbortController = null;
 
+        function filterVideosLocal(query) {
             const q = query.toLowerCase();
-            const filtered = allVideos.filter(video => {
+            return allVideos.filter(video => {
                 const v = video.videos || {};
                 const description = (v.tiktok_description || '').toLowerCase();
                 const keyword = (v.search_keyword || '').toLowerCase();
                 const category = (v.category || '').toLowerCase();
                 const hashtags = (v.tiktok_hashtags || []).join(' ').toLowerCase();
                 const summary = (v.video_summary || '').toLowerCase();
-
                 return description.includes(q) ||
                        keyword.includes(q) ||
                        category.includes(q) ||
                        hashtags.includes(q) ||
                        summary.includes(q);
             });
+        }
 
-            renderVideos(filtered);
+        async function vectorSearch(query) {
+            if (searchAbortController) searchAbortController.abort();
+            searchAbortController = new AbortController();
+
+            try {
+                const resp = await fetch(SEARCH_FUNCTION_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'apikey': SUPABASE_ANON_KEY,
+                        'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+                    },
+                    body: JSON.stringify({ query }),
+                    signal: searchAbortController.signal,
+                });
+
+                if (!resp.ok) throw new Error('Search failed');
+                const results = await resp.json();
+
+                if (results.error) throw new Error(results.error);
+
+                return results.map(r => ({
+                    id: r.id,
+                    mux_playback_id: r.mux_playback_id,
+                    mux_thumbnail_url: r.mux_thumbnail_url,
+                    mux_playback_url: r.mux_playback_url,
+                    mux_gif_url: r.mux_gif_url,
+                    status: r.status,
+                    video_id: r.video_id,
+                    similarity: r.similarity,
+                    videos: {
+                        tiktok_description: r.tiktok_description,
+                        tiktok_hashtags: r.tiktok_hashtags,
+                        search_keyword: r.search_keyword,
+                        category: r.category,
+                        video_summary: r.video_summary,
+                    },
+                }));
+            } catch (e) {
+                if (e.name === 'AbortError') return null;
+                console.warn('Vector search failed, falling back to local filter:', e);
+                return null;
+            }
+        }
+
+        let searchTimeout = null;
+
+        function filterVideos(query) {
+            if (!query.trim()) {
+                renderVideos(allVideos);
+                return;
+            }
+
+            // Instant local filter for responsiveness
+            renderVideos(filterVideosLocal(query));
+
+            // Debounced vector search for semantic results
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(async () => {
+                const results = await vectorSearch(query);
+                if (results && results.length > 0) {
+                    renderVideos(results);
+                }
+            }, 400);
         }
 
         function openModal(videoId) {

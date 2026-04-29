@@ -351,7 +351,7 @@ def update_db_status(table: str, id_column: str, id_value: str, mux_data: dict):
     supabase.table(table).update(update_data).eq(id_column, id_value).execute()
 
 
-def save_to_supabase(video: dict, keyword: str, category: str, mux_data: dict, upsert: bool = False, video_summary: str = None) -> dict:
+def save_to_supabase(video: dict, keyword: str, category: str, mux_data: dict, upsert: bool = False, video_summary: str = None, summary_embedding: list[float] = None) -> dict:
     """Save video record to Supabase. If upsert=True, updates existing record."""
     supabase = get_supabase()
     mux_asset = mux_data.get("data", {})
@@ -385,6 +385,8 @@ def save_to_supabase(video: dict, keyword: str, category: str, mux_data: dict, u
 
     if video_summary:
         record["video_summary"] = video_summary
+    if summary_embedding:
+        record["summary_embedding"] = summary_embedding
 
     if upsert:
         response = supabase.table("videos").upsert(record, on_conflict="tiktok_video_id").execute()
@@ -421,6 +423,8 @@ def save_logod_video_to_supabase(video_db_id: str, mux_data: dict, duration: flo
 
 
 GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_DIMENSIONS = 768
 GEMINI_PROMPT = """Analyze this video and return the following in plain text (no markdown formatting):
 
 SUMMARY:
@@ -497,6 +501,22 @@ def generate_video_summary(file_path: str, video_id: str) -> str | None:
     return None
 
 
+def generate_embedding(text: str, video_id: str) -> list[float] | None:
+    """Generate a vector embedding for the given text."""
+    from google.genai import types
+    try:
+        client = get_gemini_client()
+        result = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=text,
+            config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIMENSIONS),
+        )
+        return result.embeddings[0].values
+    except Exception as e:
+        thread_print(f"   [{video_id}] Embedding error: {e}")
+        return None
+
+
 def process_single_video(video: dict, keyword: str, category: str, is_existing: bool, index: int) -> dict:
     """Process a single video: download, upload to Mux, create watermarked version, save to Supabase."""
     video_id = video.get("id")
@@ -541,9 +561,13 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
             # Generate AI summary with Gemini
             thread_print(f"   [{video_id}] Generating AI summary...")
             video_summary = generate_video_summary(local_path, video_id)
+            summary_embedding = None
             if video_summary:
                 preview = video_summary[:80].replace("\n", " ")
                 thread_print(f"   [{video_id}] Summary: {preview}...")
+                summary_embedding = generate_embedding(video_summary, video_id)
+                if summary_embedding:
+                    thread_print(f"   [{video_id}] Embedding: {EMBEDDING_DIMENSIONS}d vector generated")
             else:
                 thread_print(f"   [{video_id}] Summary generation failed, continuing...")
             
@@ -557,7 +581,7 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
             thread_print(f"   [{video_id}] Mux Asset: {mux_asset_id}")
             
             # Save original to Supabase
-            db_record = save_to_supabase(video, keyword, category, mux_result, upsert=is_existing, video_summary=video_summary)
+            db_record = save_to_supabase(video, keyword, category, mux_result, upsert=is_existing, video_summary=video_summary, summary_embedding=summary_embedding)
             thread_print(f"   [{video_id}] Saved to DB: {db_record['id']}")
             
             result["success"] = True

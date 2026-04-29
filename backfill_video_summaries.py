@@ -25,6 +25,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
 GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_DIMENSIONS = 768
 
 PROMPT = """Analyze this video and return the following in plain text (no markdown formatting):
 
@@ -69,13 +71,13 @@ def get_gemini_client() -> genai.Client:
 
 
 def get_videos_needing_summary(limit: int = None) -> list[dict]:
-    """Fetch videos that have a Mux playback ID but no summary yet."""
+    """Fetch videos that need a summary or embedding."""
     supabase = get_supabase()
     query = (
         supabase.table("videos")
-        .select("id, tiktok_video_id, tiktok_author_username, mux_playback_id, tiktok_description")
-        .is_("video_summary", "null")
+        .select("id, tiktok_video_id, tiktok_author_username, mux_playback_id, tiktok_description, video_summary")
         .not_.is_("mux_playback_id", "null")
+        .or_("video_summary.is.null,summary_embedding.is.null")
         .order("created_at", desc=False)
     )
     if limit:
@@ -147,18 +149,47 @@ def analyze_video(file_path: str, video_id: str) -> str | None:
     return None
 
 
-def update_summary(video_id: str, summary: str):
-    """Write the summary back to Supabase."""
+def generate_embedding(text: str, video_id: str) -> list[float] | None:
+    """Generate a vector embedding for the given text."""
+    from google.genai import types
+    client = get_gemini_client()
+    try:
+        result = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=text,
+            config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIMENSIONS),
+        )
+        return result.embeddings[0].values
+    except Exception as e:
+        thread_print(f"   [{video_id}] Embedding error: {e}")
+        return None
+
+
+def update_video(video_id: str, summary: str, embedding: list[float] | None):
+    """Write summary and embedding back to Supabase."""
     supabase = get_supabase()
-    supabase.table("videos").update({"video_summary": summary}).eq("id", video_id).execute()
+    update_data = {"video_summary": summary}
+    if embedding:
+        update_data["summary_embedding"] = embedding
+    supabase.table("videos").update(update_data).eq("id", video_id).execute()
 
 
 def process_video(video: dict, index: int, total: int) -> bool:
-    """Process a single video: download, analyze, update DB."""
+    """Process a single video: download, analyze, embed, update DB."""
     vid = video["tiktok_video_id"]
     author = video.get("tiktok_author_username") or "unknown"
     playback_id = video["mux_playback_id"]
+    existing_summary = video.get("video_summary")
     thread_print(f"[{index}/{total}] {vid} by @{author}")
+
+    if existing_summary:
+        thread_print(f"   [{vid}] Summary exists, generating embedding only...")
+        embedding = generate_embedding(existing_summary, vid)
+        if embedding:
+            update_video(video["id"], existing_summary, embedding)
+            thread_print(f"   [{vid}] Embedding: {EMBEDDING_DIMENSIONS}d vector generated")
+            return True
+        return False
 
     mp4_path = download_mp4(playback_id, vid)
     if not mp4_path:
@@ -167,9 +198,12 @@ def process_video(video: dict, index: int, total: int) -> bool:
     try:
         summary = analyze_video(mp4_path, vid)
         if summary:
-            update_summary(video["id"], summary)
+            embedding = generate_embedding(summary, vid)
+            update_video(video["id"], summary, embedding)
             preview = summary[:120].replace("\n", " ")
             thread_print(f"   [{vid}] Summary: {preview}...")
+            if embedding:
+                thread_print(f"   [{vid}] Embedding: {EMBEDDING_DIMENSIONS}d vector generated")
             return True
         else:
             thread_print(f"   [{vid}] No summary returned")
