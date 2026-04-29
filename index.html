@@ -824,7 +824,6 @@
                     )
                 `)
                 .not('mux_playback_id', 'is', null)
-                .is('downloaded_at', null)
                 .order('created_at', { ascending: false });
 
             if (error) {

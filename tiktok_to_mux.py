@@ -37,7 +37,7 @@ TIKTOK_MAX_QUALITY_HOST = "tiktok-max-quality.p.rapidapi.com"
 TIKTOK_MAX_QUALITY_URL = f"https://{TIKTOK_MAX_QUALITY_HOST}/download"
 
 # Watermark settings
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "j.cam 400x160.png")
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "jcam-logo.png")
 WATERMARK_BANNER_HEIGHT = 100
 WATERMARK_BANNER_POSITION = 5 / 7  # 5/7 down the video
 WATERMARK_PADDING = 105
@@ -140,7 +140,7 @@ def get_max_quality_url(video_id: str, author_username: str) -> dict | None:
     return None
 
 
-def search_tiktok(keyword: str, count: int = 10, max_pages: int = 20) -> list[dict]:
+def search_tiktok(keyword: str, count: int = 10) -> list[dict]:
     """Search TikTok for videos matching the keyword. Paginates through all available results."""
     headers = {
         "x-rapidapi-key": RAPID_API_KEY,
@@ -149,28 +149,37 @@ def search_tiktok(keyword: str, count: int = 10, max_pages: int = 20) -> list[di
 
     videos = []
     cursor = "0"
+    search_id = "0"
     page_size = min(count, 30)
     seen_ids = set()
+    bad_pages = 0
 
-    for page in range(max_pages):
+    page = 0
+    while True:
+        page += 1
         params = {
             "keyword": keyword,
             "count": str(page_size),
             "cursor": cursor,
+            "search_id": search_id,
         }
 
         try:
             response = requests.get(TIKTOK_SEARCH_URL, headers=headers, params=params)
             response.raise_for_status()
             data = response.json()
-        except requests.RequestException as e:
-            print(f"   Page {page + 1} request failed: {e}")
-            break
+        except (requests.RequestException, ValueError) as e:
+            print(f"   Page {page} request failed: {e}")
+            bad_pages += 1
+            if bad_pages >= 5:
+                print(f"   5 consecutive bad pages, stopping")
+                break
+            time.sleep(1)
+            continue
 
         item_list = data.get("item_list") or data.get("data", {}).get("item_list", [])
 
-        if not item_list:
-            break
+        prev_count = len(videos)
 
         for item in item_list:
             video = item.get("video", {})
@@ -212,12 +221,25 @@ def search_tiktok(keyword: str, count: int = 10, max_pages: int = 20) -> list[di
             }
             videos.append(video_info)
 
-        print(f"   Page {page + 1}: got {len(item_list)} videos (total unique: {len(videos)})")
+        print(f"   Page {page}: got {len(item_list)} videos (total unique: {len(videos)})")
 
-        has_more = data.get("has_more") or data.get("data", {}).get("has_more")
+        if len(videos) == prev_count:
+            bad_pages += 1
+            if bad_pages >= 5:
+                print(f"   5 consecutive bad pages, stopping")
+                break
+        else:
+            bad_pages = 0
+
         next_cursor = data.get("cursor") or data.get("data", {}).get("cursor")
 
-        if not has_more or not next_cursor or str(next_cursor) == cursor:
+        # Extract search_id from log_pb.impr_id for pagination
+        log_pb = data.get("log_pb") or data.get("data", {}).get("log_pb") or {}
+        next_search_id = log_pb.get("impr_id")
+        if next_search_id:
+            search_id = str(next_search_id)
+
+        if not next_cursor or str(next_cursor) == cursor:
             break
 
         cursor = str(next_cursor)

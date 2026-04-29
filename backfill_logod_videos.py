@@ -27,7 +27,7 @@ TIKTOK_MAX_QUALITY_HOST = "tiktok-max-quality.p.rapidapi.com"
 TIKTOK_MAX_QUALITY_URL = f"https://{TIKTOK_MAX_QUALITY_HOST}/download"
 
 # Watermark settings
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "j.cam 400x160.png")
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "jcam-logo.png")
 WATERMARK_BANNER_HEIGHT = 100
 WATERMARK_BANNER_POSITION = 5 / 7
 WATERMARK_PADDING = 105
