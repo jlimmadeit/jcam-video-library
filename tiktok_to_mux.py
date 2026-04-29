@@ -140,61 +140,88 @@ def get_max_quality_url(video_id: str, author_username: str) -> dict | None:
     return None
 
 
-def search_tiktok(keyword: str, count: int = 10) -> list[dict]:
-    """Search TikTok for videos matching the keyword."""
+def search_tiktok(keyword: str, count: int = 10, max_pages: int = 20) -> list[dict]:
+    """Search TikTok for videos matching the keyword. Paginates through all available results."""
     headers = {
         "x-rapidapi-key": RAPID_API_KEY,
         "x-rapidapi-host": TIKTOK_API_HOST,
     }
-    params = {
-        "keyword": keyword,
-        "count": str(count),
-        "cursor": "0",
-    }
 
-    response = requests.get(TIKTOK_SEARCH_URL, headers=headers, params=params)
-    response.raise_for_status()
-
-    data = response.json()
     videos = []
+    cursor = "0"
+    page_size = min(count, 30)
+    seen_ids = set()
 
-    item_list = data.get("item_list") or data.get("data", {}).get("item_list", [])
-
-    for item in item_list[:count]:
-        video = item.get("video", {})
-        author = item.get("author", {})
-        stats = item.get("stats", {})
-        music = item.get("music", {})
-
-        # Get fallback URL from search results
-        play_url = video.get("downloadAddr") or video.get("playAddr")
-
-        created_timestamp = item.get("createTime")
-        created_at = None
-        if created_timestamp:
-            created_at = datetime.fromtimestamp(int(created_timestamp), tz=timezone.utc).isoformat()
-
-        description = item.get("desc") or item.get("title", "")
-
-        video_info = {
-            "id": item.get("id") or item.get("video_id") or item.get("aweme_id"),
-            "url": play_url,
-            "author_id": author.get("id"),
-            "author_username": author.get("uniqueId") or author.get("unique_id") or author.get("nickname", "unknown"),
-            "description": description,
-            "hashtags": extract_hashtags(description),
-            "music_title": music.get("title"),
-            "music_author": music.get("authorName"),
-            "like_count": stats.get("diggCount") or stats.get("likeCount"),
-            "comment_count": stats.get("commentCount"),
-            "share_count": stats.get("shareCount"),
-            "view_count": stats.get("playCount") or stats.get("viewCount"),
-            "width": video.get("width"),
-            "height": video.get("height"),
-            "duration": video.get("duration"),
-            "created_at": created_at,
+    for page in range(max_pages):
+        params = {
+            "keyword": keyword,
+            "count": str(page_size),
+            "cursor": cursor,
         }
-        videos.append(video_info)
+
+        try:
+            response = requests.get(TIKTOK_SEARCH_URL, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+        except requests.RequestException as e:
+            print(f"   Page {page + 1} request failed: {e}")
+            break
+
+        item_list = data.get("item_list") or data.get("data", {}).get("item_list", [])
+
+        if not item_list:
+            break
+
+        for item in item_list:
+            video = item.get("video", {})
+            author = item.get("author", {})
+            stats = item.get("stats", {})
+            music = item.get("music", {})
+
+            vid_id = item.get("id") or item.get("video_id") or item.get("aweme_id")
+            if not vid_id or vid_id in seen_ids:
+                continue
+            seen_ids.add(vid_id)
+
+            play_url = video.get("downloadAddr") or video.get("playAddr")
+
+            created_timestamp = item.get("createTime")
+            created_at = None
+            if created_timestamp:
+                created_at = datetime.fromtimestamp(int(created_timestamp), tz=timezone.utc).isoformat()
+
+            description = item.get("desc") or item.get("title", "")
+
+            video_info = {
+                "id": vid_id,
+                "url": play_url,
+                "author_id": author.get("id"),
+                "author_username": author.get("uniqueId") or author.get("unique_id") or author.get("nickname", "unknown"),
+                "description": description,
+                "hashtags": extract_hashtags(description),
+                "music_title": music.get("title"),
+                "music_author": music.get("authorName"),
+                "like_count": stats.get("diggCount") or stats.get("likeCount"),
+                "comment_count": stats.get("commentCount"),
+                "share_count": stats.get("shareCount"),
+                "view_count": stats.get("playCount") or stats.get("viewCount"),
+                "width": video.get("width"),
+                "height": video.get("height"),
+                "duration": video.get("duration"),
+                "created_at": created_at,
+            }
+            videos.append(video_info)
+
+        print(f"   Page {page + 1}: got {len(item_list)} videos (total unique: {len(videos)})")
+
+        has_more = data.get("has_more") or data.get("data", {}).get("has_more")
+        next_cursor = data.get("cursor") or data.get("data", {}).get("cursor")
+
+        if not has_more or not next_cursor or str(next_cursor) == cursor:
+            break
+
+        cursor = str(next_cursor)
+        time.sleep(0.5)
 
     return videos
 
@@ -422,7 +449,13 @@ def save_logod_video_to_supabase(video_db_id: str, mux_data: dict, duration: flo
     return response.data[0] if response.data else None
 
 
-GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+GEMINI_MODELS = [
+    "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash-lite-preview-09-2025",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+]
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIMENSIONS = 768
 GEMINI_PROMPT = """Analyze this video and return the following in plain text (no markdown formatting):
@@ -459,7 +492,7 @@ def get_gemini_client() -> genai.Client:
 
 
 def generate_video_summary(file_path: str, video_id: str) -> str | None:
-    """Upload video to Gemini and get an AI summary. Tries fallback models on failure."""
+    """Upload video to Gemini and get an AI summary. Retries on rate limits, falls back to other models."""
     try:
         client = get_gemini_client()
         uploaded = client.files.upload(file=file_path)
@@ -477,21 +510,28 @@ def generate_video_summary(file_path: str, video_id: str) -> str | None:
 
     last_error = None
     for model in GEMINI_MODELS:
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=[uploaded, GEMINI_PROMPT],
-            )
-            thread_print(f"   [{video_id}] Used model: {model}")
+        for attempt in range(3):
             try:
-                client.files.delete(name=uploaded.name)
-            except Exception:
-                pass
-            return response.text
-        except Exception as e:
-            last_error = e
-            thread_print(f"   [{video_id}] {model} failed: {e}")
-            time.sleep(1)
+                response = client.models.generate_content(
+                    model=model,
+                    contents=[uploaded, GEMINI_PROMPT],
+                )
+                thread_print(f"   [{video_id}] Used model: {model}")
+                try:
+                    client.files.delete(name=uploaded.name)
+                except Exception:
+                    pass
+                return response.text
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    wait = 30 * (attempt + 1)
+                    thread_print(f"   [{video_id}] {model} rate limited, waiting {wait}s (attempt {attempt + 1}/3)...")
+                    time.sleep(wait)
+                else:
+                    thread_print(f"   [{video_id}] {model} failed: {e}")
+                    break
 
     thread_print(f"   [{video_id}] All models failed: {last_error}")
     try:
@@ -735,4 +775,4 @@ def main(count: int = 10, reprocess_existing: bool = False, max_workers: int = 4
 
 
 if __name__ == "__main__":
-    main(count=25, reprocess_existing=False, max_workers=4)
+    main(count=25, reprocess_existing=False, max_workers=5)

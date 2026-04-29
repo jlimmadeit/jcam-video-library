@@ -823,7 +823,7 @@
                         video_summary
                     )
                 `)
-                .eq('status', 'ready')
+                .not_.is_('mux_playback_id', 'null')
                 .is('downloaded_at', null)
                 .order('created_at', { ascending: false });
 

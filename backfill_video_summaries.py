@@ -24,7 +24,13 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
-GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+GEMINI_MODELS = [
+    "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash-lite-preview-09-2025",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+]
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIMENSIONS = 768
 
@@ -125,21 +131,28 @@ def analyze_video(file_path: str, video_id: str) -> str | None:
 
     last_error = None
     for model in GEMINI_MODELS:
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=[uploaded, PROMPT],
-            )
-            thread_print(f"   [{video_id}] Used model: {model}")
+        for attempt in range(3):
             try:
-                client.files.delete(name=uploaded.name)
-            except Exception:
-                pass
-            return response.text
-        except Exception as e:
-            last_error = e
-            thread_print(f"   [{video_id}] {model} failed: {e}")
-            time.sleep(1)
+                response = client.models.generate_content(
+                    model=model,
+                    contents=[uploaded, PROMPT],
+                )
+                thread_print(f"   [{video_id}] Used model: {model}")
+                try:
+                    client.files.delete(name=uploaded.name)
+                except Exception:
+                    pass
+                return response.text
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    wait = 30 * (attempt + 1)
+                    thread_print(f"   [{video_id}] {model} rate limited, waiting {wait}s (attempt {attempt + 1}/3)...")
+                    time.sleep(wait)
+                else:
+                    thread_print(f"   [{video_id}] {model} failed: {e}")
+                    break
 
     thread_print(f"   [{video_id}] All models failed: {last_error}")
     try:
