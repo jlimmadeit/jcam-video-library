@@ -818,7 +818,8 @@
                         tiktok_description,
                         tiktok_hashtags,
                         search_keyword,
-                        category
+                        category,
+                        video_summary
                     )
                 `)
                 .eq('status', 'ready')
@@ -900,11 +901,13 @@
                 const keyword = (v.search_keyword || '').toLowerCase();
                 const category = (v.category || '').toLowerCase();
                 const hashtags = (v.tiktok_hashtags || []).join(' ').toLowerCase();
+                const summary = (v.video_summary || '').toLowerCase();
 
                 return description.includes(q) ||
                        keyword.includes(q) ||
                        category.includes(q) ||
-                       hashtags.includes(q);
+                       hashtags.includes(q) ||
+                       summary.includes(q);
             });
 
             renderVideos(filtered);
