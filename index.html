@@ -746,7 +746,11 @@
 
             let result;
             if (authMode === 'signup') {
-                result = await db.auth.signUp({ email, password });
+                result = await db.auth.signUp({
+                    email,
+                    password,
+                    options: { emailRedirectTo: window.location.origin + window.location.pathname }
+                });
             } else {
                 result = await db.auth.signInWithPassword({ email, password });
             }

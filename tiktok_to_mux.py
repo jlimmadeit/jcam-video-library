@@ -14,10 +14,12 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+from google import genai
 from supabase import create_client, Client
 
 load_dotenv()
@@ -27,6 +29,7 @@ MUX_TOKEN_ID = os.getenv("MUX_TOKEN_ID")
 MUX_TOKEN_SECRET = os.getenv("MUX_TOKEN_SECRET")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 TIKTOK_API_HOST = "tiktok-api23.p.rapidapi.com"
 TIKTOK_SEARCH_URL = f"https://{TIKTOK_API_HOST}/api/search/general"
@@ -348,7 +351,7 @@ def update_db_status(table: str, id_column: str, id_value: str, mux_data: dict):
     supabase.table(table).update(update_data).eq(id_column, id_value).execute()
 
 
-def save_to_supabase(video: dict, keyword: str, category: str, mux_data: dict, upsert: bool = False) -> dict:
+def save_to_supabase(video: dict, keyword: str, category: str, mux_data: dict, upsert: bool = False, video_summary: str = None) -> dict:
     """Save video record to Supabase. If upsert=True, updates existing record."""
     supabase = get_supabase()
     mux_asset = mux_data.get("data", {})
@@ -379,6 +382,9 @@ def save_to_supabase(video: dict, keyword: str, category: str, mux_data: dict, u
         "duration_seconds": video.get("duration"),
         "status": "processing",
     }
+
+    if video_summary:
+        record["video_summary"] = video_summary
 
     if upsert:
         response = supabase.table("videos").upsert(record, on_conflict="tiktok_video_id").execute()
@@ -412,6 +418,83 @@ def save_logod_video_to_supabase(video_db_id: str, mux_data: dict, duration: flo
 
     response = supabase.table("logod_videos").insert(record).execute()
     return response.data[0] if response.data else None
+
+
+GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+GEMINI_PROMPT = """Analyze this video and return the following in plain text (no markdown formatting):
+
+SUMMARY:
+Write exactly 3 sentences describing what is happening in the video. Be specific about actions, people, settings, and context.
+
+VIBE AND MOOD:
+Describe why this video is happy, funny, satisfying, or engaging. What emotion does it evoke and why? What makes it shareable?
+
+TREND TYPE:
+Identify what type of TikTok trend this is (e.g. POV skit, dance challenge, storytime, GRWM, satisfying video, prank, reaction, transition, day in my life, mukbang, duet, tutorial, thirst trap, aesthetic, unboxing, etc.). If it fits multiple trends, list all of them.
+
+TIKTOK SEARCH TERMS:
+List comma-separated words and phrases that TikTok users would actually type into TikTok search to find this type of content. Think like a TikTok user — include slang, trending phrases, niche community terms, sounds, and hashtag-style phrases.
+
+SEARCH KEYWORDS:
+List comma-separated keywords/phrases for general search. Include topics, actions, moods, styles, settings, objects, and any notable visual elements.
+
+TEXT AND SPEECH:
+List every word or phrase of text that appears visually in the video (overlays, captions, signs, watermarks, etc.) AND any spoken words or lyrics you can identify. Separate with commas. If none, write "none".
+"""
+
+_gemini_client_lock = threading.Lock()
+_gemini_client = None
+
+
+def get_gemini_client() -> genai.Client:
+    global _gemini_client
+    with _gemini_client_lock:
+        if _gemini_client is None:
+            _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        return _gemini_client
+
+
+def generate_video_summary(file_path: str, video_id: str) -> str | None:
+    """Upload video to Gemini and get an AI summary. Tries fallback models on failure."""
+    try:
+        client = get_gemini_client()
+        uploaded = client.files.upload(file=file_path)
+        for _ in range(60):
+            status = client.files.get(name=uploaded.name)
+            if status.state.name == "ACTIVE":
+                break
+            time.sleep(2)
+        else:
+            thread_print(f"   [{video_id}] Gemini file processing timed out")
+            return None
+    except Exception as e:
+        thread_print(f"   [{video_id}] Gemini upload error: {e}")
+        return None
+
+    last_error = None
+    for model in GEMINI_MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=[uploaded, GEMINI_PROMPT],
+            )
+            thread_print(f"   [{video_id}] Used model: {model}")
+            try:
+                client.files.delete(name=uploaded.name)
+            except Exception:
+                pass
+            return response.text
+        except Exception as e:
+            last_error = e
+            thread_print(f"   [{video_id}] {model} failed: {e}")
+            time.sleep(1)
+
+    thread_print(f"   [{video_id}] All models failed: {last_error}")
+    try:
+        client.files.delete(name=uploaded.name)
+    except Exception:
+        pass
+    return None
 
 
 def process_single_video(video: dict, keyword: str, category: str, is_existing: bool, index: int) -> dict:
@@ -455,6 +538,15 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
             local_path, file_size = download_result
             thread_print(f"   [{video_id}] Downloaded: {file_size / 1024 / 1024:.1f} MB")
             
+            # Generate AI summary with Gemini
+            thread_print(f"   [{video_id}] Generating AI summary...")
+            video_summary = generate_video_summary(local_path, video_id)
+            if video_summary:
+                preview = video_summary[:80].replace("\n", " ")
+                thread_print(f"   [{video_id}] Summary: {preview}...")
+            else:
+                thread_print(f"   [{video_id}] Summary generation failed, continuing...")
+            
             # Upload original to Mux
             mux_result = upload_to_mux_direct(
                 local_path,
@@ -465,7 +557,7 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
             thread_print(f"   [{video_id}] Mux Asset: {mux_asset_id}")
             
             # Save original to Supabase
-            db_record = save_to_supabase(video, keyword, category, mux_result, upsert=is_existing)
+            db_record = save_to_supabase(video, keyword, category, mux_result, upsert=is_existing, video_summary=video_summary)
             thread_print(f"   [{video_id}] Saved to DB: {db_record['id']}")
             
             result["success"] = True

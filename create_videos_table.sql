@@ -58,6 +58,9 @@ CREATE TABLE videos (
     status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'ready', 'failed', 'deleted')),
     error_message TEXT,
     
+    -- AI-generated summary (Gemini 2.5 Flash)
+    video_summary TEXT,
+
     -- Moderation/curation
     is_approved BOOLEAN DEFAULT FALSE,
     is_featured BOOLEAN DEFAULT FALSE,
@@ -86,7 +89,10 @@ CREATE INDEX idx_videos_is_approved ON videos(is_approved) WHERE is_approved = T
 CREATE INDEX idx_videos_tiktok_author ON videos(tiktok_author_username);
 
 -- Full text search on description
-CREATE INDEX idx_videos_description_fts ON videos USING GIN (to_tsvector('english', tiktok_description));
+CREATE INDEX idx_videos_description_fts ON videos USING GIN (to_tsvector('english'::regconfig, COALESCE(tiktok_description, '')));
+
+-- Full text search on video_summary
+CREATE INDEX idx_videos_summary_fts ON videos USING GIN (to_tsvector('english'::regconfig, COALESCE(video_summary, '')));
 
 -- Trigger to auto-update updated_at
 CREATE OR REPLACE FUNCTION update_updated_at_column()
