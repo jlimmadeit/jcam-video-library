@@ -28,7 +28,7 @@ RAPID_API_KEY = os.getenv("RAPID_API_KEY")
 MUX_TOKEN_ID = os.getenv("MUX_TOKEN_ID")
 MUX_TOKEN_SECRET = os.getenv("MUX_TOKEN_SECRET")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_KEY = os.getenv("SERVICE_ROLE_SECRET")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 TIKTOK_API_HOST = "tiktok-api23.p.rapidapi.com"
@@ -55,7 +55,7 @@ _thread_local = threading.local()
 def get_supabase() -> Client:
     """Get thread-local Supabase client."""
     if not hasattr(_thread_local, "supabase"):
-        _thread_local.supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        _thread_local.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     return _thread_local.supabase
 
 
@@ -710,8 +710,39 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
     return result
 
 
+def run_backfills():
+    """Run all backfill scripts before searching for new videos."""
+    import subprocess
+    script_dir = os.path.dirname(__file__)
+    backfills = [
+        ("Logod videos", "backfill_logod_videos.py"),
+        ("Video summaries", "backfill_video_summaries.py"),
+        ("Embeddings", "backfill_embeddings.py"),
+    ]
+    for name, script in backfills:
+        path = os.path.join(script_dir, script)
+        if not os.path.exists(path):
+            continue
+        print(f"\n{'='*50}")
+        print(f"=== Backfill: {name} ===")
+        print(f"{'='*50}\n")
+        result = subprocess.run(
+            ["/usr/local/bin/python3", path],
+            cwd=script_dir,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+        if result.returncode != 0:
+            print(f"   Backfill {name} exited with code {result.returncode}")
+
+
 def main(count: int = 10, reprocess_existing: bool = False, max_workers: int = 4):
     """Main function with multithreading support."""
+    run_backfills()
+
+    print(f"\n{'='*50}")
+    print(f"=== Searching for new videos ===")
+    print(f"{'='*50}\n")
+
     csv_path = os.path.join(os.path.dirname(__file__), "keywords.csv")
     keywords = load_keywords(csv_path)
 

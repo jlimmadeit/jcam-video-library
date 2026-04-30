@@ -180,6 +180,34 @@
             opacity: 1;
         }
 
+        .video-card .hide-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 32px;
+            height: 32px;
+            background: rgba(0,0,0,0.7);
+            border: none;
+            border-radius: 50%;
+            color: #fff;
+            font-size: 16px;
+            cursor: pointer;
+            z-index: 5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s, background 0.2s;
+        }
+
+        .video-card:hover .hide-btn {
+            opacity: 1;
+        }
+
+        .video-card .hide-btn:hover {
+            background: rgba(230, 57, 70, 0.9);
+        }
+
         .play-icon svg {
             width: 24px;
             height: 24px;
@@ -199,6 +227,7 @@
             z-index: 1000;
             align-items: center;
             justify-content: center;
+            gap: 16px;
             padding: 40px;
         }
 
@@ -209,7 +238,7 @@
         .modal-content {
             position: relative;
             max-height: calc(100vh - 80px);
-            max-width: calc((100vh - 80px) * 9 / 16 + 0px);
+            max-width: calc((100vh - 80px) * 9 / 16);
             width: 100%;
             background: #111;
             border-radius: 16px;
@@ -241,6 +270,49 @@
             background: rgba(0,0,0,0.8);
         }
 
+        .modal-nav {
+            width: 48px;
+            height: 48px;
+            background: rgba(255,255,255,0.1);
+            border: none;
+            border-radius: 50%;
+            color: #fff;
+            font-size: 28px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: background 0.2s, opacity 0.2s;
+        }
+
+        .modal-nav:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .modal-nav:disabled {
+            opacity: 0.2;
+            cursor: default;
+        }
+
+        .modal-nav.prev {
+        }
+
+        .modal-nav.next {
+        }
+
+        @media (max-width: 800px) {
+            .modal {
+                gap: 8px;
+                padding: 20px 8px;
+            }
+            .modal-nav {
+                width: 36px;
+                height: 36px;
+                font-size: 22px;
+            }
+        }
+
         .modal-video {
             width: 100%;
             flex: 1;
@@ -252,13 +324,17 @@
             padding: 20px;
             flex-shrink: 0;
             overflow-y: auto;
-            max-height: 200px;
+            max-height: 280px;
         }
 
         .modal-info h3 {
             font-size: 1rem;
-            margin-bottom: 8px;
+            margin-bottom: 12px;
             color: #fff;
+        }
+
+        .modal-info #downloadArea {
+            margin-bottom: 12px;
         }
 
         .modal-info .description {
@@ -268,6 +344,15 @@
             line-height: 1.5;
             max-height: 80px;
             overflow-y: auto;
+        }
+
+        .modal-info .summary {
+            font-size: 0.85rem;
+            color: #999;
+            line-height: 1.5;
+            padding-top: 12px;
+            border-top: 1px solid #222;
+            margin-top: 12px;
         }
 
         .modal-info .hashtags {
@@ -593,25 +678,19 @@
 
     <!-- Modal -->
     <div class="modal" id="modal">
+        <button class="modal-nav prev" id="modalPrev" title="Previous video">&#8249;</button>
         <div class="modal-content">
             <button class="modal-close" id="modalClose">&times;</button>
             <video class="modal-video" id="modalVideo" controls playsinline></video>
             <div class="modal-info">
                 <h3 id="modalKeyword"></h3>
+                <div id="downloadArea"></div>
                 <p class="description" id="modalDescription"></p>
                 <div class="hashtags" id="modalHashtags"></div>
-                <div id="downloadArea">
-                    <button class="download-btn" id="downloadBtn">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="7 10 12 15 17 10"></polyline>
-                            <line x1="12" y1="15" x2="12" y2="3"></line>
-                        </svg>
-                        Download Video
-                    </button>
-                </div>
+                <div class="summary" id="modalSummary"></div>
             </div>
         </div>
+        <button class="modal-nav next" id="modalNext" title="Next video">&#8250;</button>
     </div>
 
     <!-- Auth Modal -->
@@ -646,9 +725,12 @@
         const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
         let allVideos = [];
+        let displayedVideos = [];
         let currentVideo = null;
         let currentUser = null;
         let authMode = 'login';
+
+        const ADMIN_EMAILS = ['limjoe25@gmail.com'];
 
         // --- Auth ---
 
@@ -670,14 +752,22 @@
             }
 
             updateDownloadArea();
+
+            if (allVideos.length > 0) {
+                renderVideos(displayedVideos.length > 0 ? displayedVideos : allVideos);
+            }
         }
 
         function updateDownloadArea() {
             const area = document.getElementById('downloadArea');
             if (!area) return;
 
+            const isAdmin = currentUser && ADMIN_EMAILS.includes(currentUser.email);
+
+            let html = '';
+
             if (currentUser) {
-                area.innerHTML = `
+                html += `
                     <button class="download-btn" id="downloadBtn" onclick="downloadVideo()">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -688,7 +778,7 @@
                     </button>
                 `;
             } else {
-                area.innerHTML = `
+                html += `
                     <button class="download-btn" style="opacity: 0.5; cursor: default;" disabled>
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -702,6 +792,8 @@
                     </p>
                 `;
             }
+
+            area.innerHTML = html;
         }
 
         function showAuthModal(mode) {
@@ -805,43 +897,51 @@
         // --- Videos ---
 
         async function loadVideos() {
-            const { data, error } = await db
-                .from('logod_videos')
-                .select(`
-                    id,
-                    mux_playback_id,
-                    mux_thumbnail_url,
-                    mux_playback_url,
-                    mux_gif_url,
-                    status,
-                    video_id,
-                    videos (
-                        tiktok_description,
-                        tiktok_hashtags,
-                        search_keyword,
-                        category,
-                        video_summary
-                    )
-                `)
-                .not('mux_playback_id', 'is', null)
-                .order('created_at', { ascending: false });
+            try {
+                const { data, error } = await db
+                    .from('logod_videos')
+                    .select(`
+                        id,
+                        mux_playback_id,
+                        mux_thumbnail_url,
+                        mux_playback_url,
+                        mux_gif_url,
+                        status,
+                        video_id,
+                        videos (
+                            tiktok_description,
+                            tiktok_hashtags,
+                            search_keyword,
+                            category,
+                            video_summary
+                        )
+                    `)
+                    .not('mux_playback_id', 'is', null)
+                    .neq('is_hidden', true)
+                    .order('created_at', { ascending: false });
 
-            if (error) {
-                console.error('Error loading videos:', error);
+                if (error) {
+                    console.error('Supabase error:', error);
+                    throw error;
+                }
+
+                console.log('Loaded videos:', data?.length, data?.[0]);
+
+                allVideos = data || [];
+                renderVideos(allVideos);
+            } catch (err) {
+                console.error('loadVideos failed:', err);
                 document.getElementById('videoGrid').innerHTML = `
                     <div class="empty-state" style="grid-column: 1 / -1;">
-                        <p>Error loading videos: ${error.message}</p>
-                        <p style="font-size: 0.8rem; margin-top: 10px;">${error.hint || ''}</p>
+                        <p>Error loading videos: ${err.message}</p>
+                        <p style="font-size: 0.8rem; margin-top: 10px;">${err.hint || ''}</p>
                     </div>
                 `;
-                return;
             }
-
-            allVideos = data || [];
-            renderVideos(allVideos);
         }
 
         function renderVideos(videos) {
+            displayedVideos = videos;
             const grid = document.getElementById('videoGrid');
             const stats = document.getElementById('stats');
 
@@ -866,12 +966,15 @@
                 return;
             }
 
+            const isAdmin = currentUser && ADMIN_EMAILS.includes(currentUser.email);
+
             grid.innerHTML = videos.map(video => {
                 const v = video.videos || {};
                 return `
                     <div class="video-card" data-id="${video.id}">
                         <img class="thumbnail" src="${video.mux_thumbnail_url}" alt="${v.search_keyword || 'Video'}" loading="lazy">
-                        <img class="gif-preview" src="${video.mux_gif_url}" alt="" loading="lazy">
+                        <img class="gif-preview" data-src="${video.mux_gif_url}" alt="">
+                        ${isAdmin ? `<button class="hide-btn" data-hide-id="${video.id}" title="Hide video">&times;</button>` : ''}
                         <div class="overlay">
                             ${v.category ? `<span class="category">${v.category}</span>` : ''}
                             <div class="keyword">${v.search_keyword || ''}</div>
@@ -884,8 +987,26 @@
             }).join('');
 
             grid.querySelectorAll('.video-card').forEach(card => {
-                card.addEventListener('click', () => openModal(card.dataset.id));
+                card.addEventListener('click', (e) => {
+                    if (e.target.closest('.hide-btn')) return;
+                    openModal(card.dataset.id);
+                });
+                card.addEventListener('mouseenter', () => {
+                    const gif = card.querySelector('.gif-preview');
+                    if (gif && !gif.src) {
+                        gif.src = gif.dataset.src;
+                    }
+                });
             });
+
+            if (isAdmin) {
+                grid.querySelectorAll('.hide-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        hideVideoById(btn.dataset.hideId);
+                    });
+                });
+            }
         }
 
         let searchAbortController = null;
@@ -973,8 +1094,28 @@
             }, 400);
         }
 
+        function updateModalNav() {
+            const idx = displayedVideos.findIndex(v => v.id === currentVideo?.id);
+            document.getElementById('modalPrev').disabled = idx <= 0;
+            document.getElementById('modalNext').disabled = idx < 0 || idx >= displayedVideos.length - 1;
+        }
+
+        function navigateModal(direction) {
+            if (!currentVideo) return;
+            const idx = displayedVideos.findIndex(v => v.id === currentVideo.id);
+            const nextIdx = idx + direction;
+            if (nextIdx < 0 || nextIdx >= displayedVideos.length) return;
+
+            const videoEl = document.getElementById('modalVideo');
+            videoEl.pause();
+            videoEl.src = '';
+
+            openModal(displayedVideos[nextIdx].id);
+        }
+
         function openModal(videoId) {
-            const video = allVideos.find(v => v.id === videoId);
+            const video = allVideos.find(v => v.id === videoId)
+                       || displayedVideos.find(v => v.id === videoId);
             if (!video) return;
 
             currentVideo = video;
@@ -986,6 +1127,10 @@
             const hashtagsEl = document.getElementById('modalHashtags');
             const hashtags = v.tiktok_hashtags || [];
             hashtagsEl.innerHTML = hashtags.map(tag => `<span class="hashtag">#${tag}</span>`).join('');
+
+            const summaryEl = document.getElementById('modalSummary');
+            summaryEl.textContent = v.video_summary || '';
+            summaryEl.style.display = v.video_summary ? '' : 'none';
 
             updateDownloadArea();
 
@@ -1008,6 +1153,7 @@
 
             document.getElementById('modal').classList.add('active');
             document.body.style.overflow = 'hidden';
+            updateModalNav();
         }
 
         function closeModal() {
@@ -1068,6 +1214,47 @@
             }
         }
 
+        async function hideVideo() {
+            if (!currentVideo || !currentUser || !ADMIN_EMAILS.includes(currentUser.email)) return;
+
+            if (!confirm('Hide this video from the library?')) return;
+
+            try {
+                const { error } = await db
+                    .from('logod_videos')
+                    .update({ is_hidden: true })
+                    .eq('id', currentVideo.id);
+
+                if (error) throw error;
+
+                allVideos = allVideos.filter(v => v.id !== currentVideo.id);
+                filterVideos(document.getElementById('searchInput').value);
+                closeModal();
+            } catch (error) {
+                console.error('Hide error:', error);
+                alert('Failed to hide video. Please try again.');
+            }
+        }
+
+        async function hideVideoById(videoId) {
+            if (!currentUser || !ADMIN_EMAILS.includes(currentUser.email)) return;
+
+            try {
+                const { error } = await db
+                    .from('logod_videos')
+                    .update({ is_hidden: true })
+                    .eq('id', videoId);
+
+                if (error) throw error;
+
+                allVideos = allVideos.filter(v => v.id !== videoId);
+                filterVideos(document.getElementById('searchInput').value);
+            } catch (error) {
+                console.error('Hide error:', error);
+                alert('Failed to hide video. Please try again.');
+            }
+        }
+
         // --- Event listeners ---
 
         document.getElementById('searchInput').addEventListener('input', (e) => {
@@ -1075,6 +1262,8 @@
         });
 
         document.getElementById('modalClose').addEventListener('click', closeModal);
+        document.getElementById('modalPrev').addEventListener('click', () => navigateModal(-1));
+        document.getElementById('modalNext').addEventListener('click', () => navigateModal(1));
         document.getElementById('modal').addEventListener('click', (e) => {
             if (e.target === e.currentTarget) closeModal();
         });
@@ -1089,12 +1278,19 @@
                 closeModal();
                 closeAuthModal();
             }
+            if (document.getElementById('modal').classList.contains('active')) {
+                if (e.key === 'ArrowLeft') navigateModal(-1);
+                if (e.key === 'ArrowRight') navigateModal(1);
+            }
         });
 
         // --- Init ---
 
-        initAuth();
-        loadVideos();
+        async function init() {
+            await initAuth();
+            await loadVideos();
+        }
+        init();
     </script>
 </body>
 </html>

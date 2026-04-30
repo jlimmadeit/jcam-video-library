@@ -21,7 +21,7 @@ RAPID_API_KEY = os.getenv("RAPID_API_KEY")
 MUX_TOKEN_ID = os.getenv("MUX_TOKEN_ID")
 MUX_TOKEN_SECRET = os.getenv("MUX_TOKEN_SECRET")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_KEY = os.getenv("SERVICE_ROLE_SECRET")
 
 TIKTOK_MAX_QUALITY_HOST = "tiktok-max-quality.p.rapidapi.com"
 TIKTOK_MAX_QUALITY_URL = f"https://{TIKTOK_MAX_QUALITY_HOST}/download"
@@ -41,7 +41,7 @@ _thread_local = threading.local()
 
 def get_supabase() -> Client:
     if not hasattr(_thread_local, "supabase"):
-        _thread_local.supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        _thread_local.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     return _thread_local.supabase
 
 
@@ -51,17 +51,17 @@ def thread_print(*args, **kwargs):
 
 
 def get_videos_without_logod() -> list[dict]:
-    """Get all videos that don't have a logod version yet."""
+    """Get all videos that don't have a logod version yet (including hidden ones)."""
     supabase = get_supabase()
     
-    # Get all video IDs that already have logod versions
+    # Get all video IDs that already have logod versions (including hidden)
     logod_response = supabase.table("logod_videos").select("video_id").execute()
     logod_video_ids = {row["video_id"] for row in logod_response.data}
     
     # Get all videos
     videos_response = supabase.table("videos").select("id, tiktok_video_id, tiktok_author_username, duration_seconds").execute()
     
-    # Filter to only videos without logod versions
+    # Filter to only videos without any logod version (hidden or not)
     videos = [v for v in videos_response.data if v["id"] not in logod_video_ids]
     return videos
 

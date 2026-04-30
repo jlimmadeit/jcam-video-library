@@ -22,7 +22,7 @@ load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_KEY = os.getenv("SERVICE_ROLE_SECRET")
 
 GEMINI_MODELS = [
     "gemini-3.1-flash-lite-preview",
@@ -66,7 +66,7 @@ def thread_print(*args, **kwargs):
 
 def get_supabase() -> Client:
     if not hasattr(_thread_local, "supabase"):
-        _thread_local.supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        _thread_local.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     return _thread_local.supabase
 
 

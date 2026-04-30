@@ -31,12 +31,12 @@ CREATE TABLE videos (
     ) STORED,
     mux_thumbnail_url TEXT GENERATED ALWAYS AS (
         CASE WHEN mux_playback_id IS NOT NULL 
-        THEN 'https://image.mux.com/' || mux_playback_id || '/thumbnail.jpg'
+        THEN 'https://image.mux.com/' || mux_playback_id || '/thumbnail.jpg?width=400&height=710&fit_mode=smartcrop'
         ELSE NULL END
     ) STORED,
     mux_gif_url TEXT GENERATED ALWAYS AS (
         CASE WHEN mux_playback_id IS NOT NULL 
-        THEN 'https://image.mux.com/' || mux_playback_id || '/animated.gif'
+        THEN 'https://image.mux.com/' || mux_playback_id || '/animated.webp?width=320&fps=10&end=4'
         ELSE NULL END
     ) STORED,
     mux_status TEXT DEFAULT 'preparing',

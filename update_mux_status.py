@@ -14,9 +14,9 @@ load_dotenv()
 MUX_TOKEN_ID = os.getenv("MUX_TOKEN_ID")
 MUX_TOKEN_SECRET = os.getenv("MUX_TOKEN_SECRET")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_KEY = os.getenv("SERVICE_ROLE_SECRET")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def get_mux_asset_status(asset_id: str) -> dict | None:

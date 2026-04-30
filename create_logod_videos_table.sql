@@ -15,12 +15,12 @@ CREATE TABLE logod_videos (
     ) STORED,
     mux_thumbnail_url TEXT GENERATED ALWAYS AS (
         CASE WHEN mux_playback_id IS NOT NULL 
-        THEN 'https://image.mux.com/' || mux_playback_id || '/thumbnail.jpg'
+        THEN 'https://image.mux.com/' || mux_playback_id || '/thumbnail.jpg?width=400&height=710&fit_mode=smartcrop'
         ELSE NULL END
     ) STORED,
     mux_gif_url TEXT GENERATED ALWAYS AS (
         CASE WHEN mux_playback_id IS NOT NULL 
-        THEN 'https://image.mux.com/' || mux_playback_id || '/animated.gif'
+        THEN 'https://image.mux.com/' || mux_playback_id || '/animated.webp?width=320&fps=10&end=4'
         ELSE NULL END
     ) STORED,
     mux_status TEXT DEFAULT 'preparing',
@@ -41,6 +41,9 @@ CREATE TABLE logod_videos (
     status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'ready', 'failed')),
     error_message TEXT,
     
+    -- Soft-delete
+    is_hidden BOOLEAN DEFAULT FALSE,
+    
     -- Timestamps
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -52,6 +55,7 @@ CREATE INDEX idx_logod_videos_video_id ON logod_videos(video_id);
 CREATE INDEX idx_logod_videos_status ON logod_videos(status);
 CREATE INDEX idx_logod_videos_mux_asset_id ON logod_videos(mux_asset_id);
 CREATE INDEX idx_logod_videos_created_at ON logod_videos(created_at DESC);
+CREATE INDEX idx_logod_videos_is_hidden ON logod_videos(is_hidden) WHERE is_hidden = TRUE;
 
 -- Trigger to auto-update updated_at
 CREATE TRIGGER logod_videos_updated_at
