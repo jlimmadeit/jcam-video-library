@@ -259,13 +259,21 @@ def download_video(url: str, video_id: str) -> str | None:
         response = requests.get(url, stream=True, timeout=120)
         response.raise_for_status()
         
-        # Create temp file with .mp4 extension
         temp_dir = tempfile.gettempdir()
         temp_path = os.path.join(temp_dir, f"tiktok_{video_id}.mp4")
         
+        total = int(response.headers.get("content-length", 0))
+        downloaded = 0
+        last_log = time.time()
         with open(temp_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
+                downloaded += len(chunk)
+                if total and time.time() - last_log >= 10:
+                    pct = downloaded * 100 // total
+                    mb = downloaded / 1024 / 1024
+                    thread_print(f"   [{video_id}] Downloading... {mb:.0f} MB ({pct}%)")
+                    last_log = time.time()
         
         file_size = os.path.getsize(temp_path)
         return temp_path, file_size
@@ -562,11 +570,14 @@ def _upload_to_gemini(file_path: str, video_id: str):
     """Upload video to Gemini and wait for it to be active. Returns (client, uploaded_file) or (None, None)."""
     try:
         client = get_gemini_client()
+        thread_print(f"   [{video_id}] Uploading to Gemini...")
         uploaded = client.files.upload(file=file_path)
-        for _ in range(60):
+        for i in range(60):
             status = client.files.get(name=uploaded.name)
             if status.state.name == "ACTIVE":
                 return client, uploaded
+            if i > 0 and i % 10 == 0:
+                thread_print(f"   [{video_id}] Gemini processing... ({i * 2}s)")
             time.sleep(2)
         thread_print(f"   [{video_id}] Gemini file processing timed out")
         return None, None
@@ -594,6 +605,9 @@ def _gemini_generate(client, uploaded, prompt: str, video_id: str) -> str | None
                     wait = 30 * (attempt + 1)
                     thread_print(f"   [{video_id}] {model} rate limited, waiting {wait}s (attempt {attempt + 1}/3)...")
                     time.sleep(wait)
+                elif "503" in err_str or "UNAVAILABLE" in err_str:
+                    thread_print(f"   [{video_id}] {model} unavailable, trying next model...")
+                    break
                 else:
                     thread_print(f"   [{video_id}] {model} failed: {e}")
                     break
