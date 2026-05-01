@@ -50,6 +50,10 @@ WATERMARK_FONT_PATH = (
     else "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 )
 
+MAX_DOWNLOAD_SIZE = 500 * 1024 * 1024  # 500 MB
+MAX_RUNTIME_SECONDS = 45 * 60  # 45 minutes
+_start_time = time.time()
+
 # Thread-safe print lock
 print_lock = threading.Lock()
 
@@ -259,10 +263,14 @@ def download_video(url: str, video_id: str) -> str | None:
         response = requests.get(url, stream=True, timeout=120)
         response.raise_for_status()
         
+        total = int(response.headers.get("content-length", 0))
+        if total > MAX_DOWNLOAD_SIZE:
+            thread_print(f"   [{video_id}] Skipping: {total / 1024 / 1024:.0f} MB exceeds {MAX_DOWNLOAD_SIZE // 1024 // 1024} MB limit")
+            return None, "File too large"
+        
         temp_dir = tempfile.gettempdir()
         temp_path = os.path.join(temp_dir, f"tiktok_{video_id}.mp4")
         
-        total = int(response.headers.get("content-length", 0))
         downloaded = 0
         last_log = time.time()
         with open(temp_path, "wb") as f:
@@ -882,6 +890,9 @@ def cleanup_temp_files():
 
 def main(count: int = 10, reprocess_existing: bool = False, max_workers: int = 4):
     """Main function with multithreading support."""
+    global _start_time
+    _start_time = time.time()
+    
     cleanup_temp_files()
     run_backfills()
 
@@ -904,6 +915,11 @@ def main(count: int = 10, reprocess_existing: bool = False, max_workers: int = 4
     total_failed = 0
 
     for entry in keywords:
+        elapsed = time.time() - _start_time
+        if elapsed > MAX_RUNTIME_SECONDS:
+            print(f"\n=== Runtime limit reached ({elapsed / 60:.0f}m), stopping gracefully ===")
+            break
+
         keyword = entry.get("keywords", "")
         category = entry.get("category", "")
 
