@@ -58,8 +58,8 @@ def get_videos_without_logod() -> list[dict]:
     logod_response = supabase.table("logod_videos").select("video_id").execute()
     logod_video_ids = {row["video_id"] for row in logod_response.data}
     
-    # Get all videos
-    videos_response = supabase.table("videos").select("id, tiktok_video_id, tiktok_author_username, duration_seconds").execute()
+    # Get all videos (include mux_playback_id for MP4 fallback)
+    videos_response = supabase.table("videos").select("id, tiktok_video_id, tiktok_author_username, duration_seconds, mux_playback_id").execute()
     
     # Filter to only videos without any logod version (hidden or not)
     videos = [v for v in videos_response.data if v["id"] not in logod_video_ids]
@@ -95,23 +95,37 @@ def get_max_quality_url(video_id: str, author_username: str) -> str | None:
                         continue
                 elif url:
                     return url
-    except requests.RequestException:
-        pass
+            thread_print(f"   [{video_id}] TikTok API: success but no usable URL in response")
+        else:
+            status = data.get("status", "unknown")
+            msg = data.get("message", "")
+            thread_print(f"   [{video_id}] TikTok API: status={status} message={msg}")
+    except requests.RequestException as e:
+        thread_print(f"   [{video_id}] TikTok API request error: {e}")
     
     return None
 
 
-def download_video(url: str, output_path: str) -> bool:
-    """Download video from URL."""
+def download_video(url: str, output_path: str, tiktok_id: str = "") -> tuple[bool, str]:
+    """Download video from URL. Returns (success, error_message)."""
     try:
         response = requests.get(url, stream=True, timeout=120)
         response.raise_for_status()
+        content_type = response.headers.get("Content-Type", "")
+        if "video" not in content_type and "octet-stream" not in content_type:
+            return False, f"Unexpected Content-Type: {content_type} (HTTP {response.status_code})"
         with open(output_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
-        return True
-    except Exception:
-        return False
+        file_size = os.path.getsize(output_path)
+        if file_size < 1024:
+            os.remove(output_path)
+            return False, f"File too small ({file_size} bytes), likely not a video"
+        return True, ""
+    except requests.HTTPError as e:
+        return False, f"HTTP {e.response.status_code}: {e.response.reason}"
+    except Exception as e:
+        return False, str(e)
 
 
 def add_watermark(input_path: str, output_path: str, author_username: str) -> bool:
@@ -229,40 +243,106 @@ def save_logod_video(video_db_id: str, mux_data: dict, duration: float = None, f
     return response.data[0] if response.data else None
 
 
+def get_mux_mp4_url(playback_id: str) -> str | None:
+    """Get a working MP4 download URL from Mux.
+    Tries the static rendition paths in order of quality.
+    """
+    if not playback_id:
+        return None
+    # Mux static rendition names for mp4_support: "capped-1080p"
+    for quality in ["high", "medium", "low"]:
+        url = f"https://stream.mux.com/{playback_id}/{quality}.mp4"
+        try:
+            r = requests.head(url, timeout=10, allow_redirects=True)
+            if r.status_code == 200:
+                return url
+        except requests.RequestException:
+            continue
+    return None
+
+
+def reupload_original_to_mux(file_path: str, video_db_id: str, tiktok_id: str, category: str = "") -> str | None:
+    """Re-upload the original video to Mux and update the videos table. Returns new playback_id."""
+    supabase = get_supabase()
+    mux_result = upload_to_mux_direct(file_path, passthrough=f"tiktok:{tiktok_id}:{category}")
+    mux_asset = mux_result.get("data", {})
+    playback_ids = mux_asset.get("playback_ids", [])
+    playback_id = playback_ids[0]["id"] if playback_ids else None
+
+    update = {
+        "mux_asset_id": mux_asset.get("id"),
+        "mux_playback_id": playback_id,
+        "mux_status": mux_asset.get("status"),
+        "status": "processing",
+    }
+    supabase.table("videos").update(update).eq("id", video_db_id).execute()
+    return playback_id
+
+
 def process_video(video: dict, index: int) -> dict:
-    """Process a single video: download from TikTok, watermark, upload to Mux."""
+    """Process a single video: download, watermark, upload to Mux.
+    Tries Mux MP4 first. If corrupt/too small, falls back to TikTok
+    and re-uploads the original to Mux.
+    """
     video_id = video["id"]
     tiktok_id = video["tiktok_video_id"]
     author = video["tiktok_author_username"] or "unknown"
     duration = video.get("duration_seconds")
+    playback_id = video.get("mux_playback_id")
     
     result = {"video_id": video_id, "success": False, "error": None}
     
     thread_print(f"{index}. Processing {tiktok_id} by @{author}")
     
-    # Get fresh download URL from TikTok
-    thread_print(f"   [{tiktok_id}] Fetching download URL...")
-    video_url = get_max_quality_url(tiktok_id, author)
-    if not video_url:
-        result["error"] = "Could not get download URL"
-        thread_print(f"   [{tiktok_id}] Could not get download URL")
-        return result
-    
     temp_dir = tempfile.gettempdir()
     original_path = os.path.join(temp_dir, f"tiktok_{tiktok_id}.mp4")
     watermarked_path = os.path.join(temp_dir, f"tiktok_{tiktok_id}_logod.mp4")
+
+    mux_url = get_mux_mp4_url(playback_id)
     
     try:
-        # Download from TikTok
-        thread_print(f"   [{tiktok_id}] Downloading from TikTok...")
-        if not download_video(video_url, original_path):
-            result["error"] = "Download failed"
-            thread_print(f"   [{tiktok_id}] Download failed")
+        downloaded = False
+        needs_reupload = False
+
+        # 1) Try Mux MP4
+        if mux_url:
+            thread_print(f"   [{tiktok_id}] Downloading from Mux...")
+            success, dl_error = download_video(mux_url, original_path, tiktok_id)
+            if success:
+                file_size = os.path.getsize(original_path)
+                thread_print(f"   [{tiktok_id}] Downloaded from Mux: {file_size / 1024 / 1024:.1f} MB")
+                downloaded = True
+            else:
+                thread_print(f"   [{tiktok_id}] Mux failed: {dl_error}")
+
+        # 2) Mux failed or unavailable — fall back to TikTok
+        if not downloaded:
+            thread_print(f"   [{tiktok_id}] Fetching TikTok download URL...")
+            tiktok_url = get_max_quality_url(tiktok_id, author)
+            if tiktok_url:
+                thread_print(f"   [{tiktok_id}] Downloading from TikTok...")
+                success, dl_error = download_video(tiktok_url, original_path, tiktok_id)
+                if success:
+                    file_size = os.path.getsize(original_path)
+                    thread_print(f"   [{tiktok_id}] Downloaded from TikTok: {file_size / 1024 / 1024:.1f} MB")
+                    downloaded = True
+                    needs_reupload = True
+                else:
+                    thread_print(f"   [{tiktok_id}] TikTok failed: {dl_error}")
+            else:
+                thread_print(f"   [{tiktok_id}] TikTok URL not available")
+
+        if not downloaded:
+            result["error"] = "All download sources failed"
+            thread_print(f"   [{tiktok_id}] All download sources failed")
             return result
-        
-        file_size = os.path.getsize(original_path)
-        thread_print(f"   [{tiktok_id}] Downloaded: {file_size / 1024 / 1024:.1f} MB")
-        
+
+        # Re-upload original to Mux if we had to fall back to TikTok
+        if needs_reupload:
+            thread_print(f"   [{tiktok_id}] Re-uploading original to Mux...")
+            new_playback_id = reupload_original_to_mux(original_path, video_id, tiktok_id)
+            thread_print(f"   [{tiktok_id}] New Mux playback ID: {new_playback_id}")
+
         # Watermark
         thread_print(f"   [{tiktok_id}] Watermarking...")
         if not add_watermark(original_path, watermarked_path, author):
@@ -270,15 +350,23 @@ def process_video(video: dict, index: int) -> dict:
             thread_print(f"   [{tiktok_id}] Watermarking failed")
             return result
         
+        # Original no longer needed after watermarking
+        if os.path.exists(original_path):
+            os.remove(original_path)
+        
         watermarked_size = os.path.getsize(watermarked_path)
         thread_print(f"   [{tiktok_id}] Watermarked: {watermarked_size / 1024 / 1024:.1f} MB")
         
-        # Upload to Mux
-        thread_print(f"   [{tiktok_id}] Uploading to Mux...")
+        # Upload watermarked to Mux
+        thread_print(f"   [{tiktok_id}] Uploading logod to Mux...")
         mux_result = upload_to_mux_direct(
             watermarked_path,
             passthrough=f"tiktok:{tiktok_id}:logod",
         )
+        
+        # Watermarked file no longer needed after upload
+        if os.path.exists(watermarked_path):
+            os.remove(watermarked_path)
         
         logod_mux_asset_id = mux_result.get("data", {}).get("id")
         thread_print(f"   [{tiktok_id}] Logod Mux Asset: {logod_mux_asset_id}")

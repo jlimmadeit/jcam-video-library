@@ -1,0 +1,4 @@
+requests
+python-dotenv
+supabase
+google-genai

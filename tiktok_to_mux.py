@@ -10,6 +10,7 @@ import base64
 import csv
 import json
 import os
+import platform
 import re
 import subprocess
 import tempfile
@@ -43,7 +44,11 @@ WATERMARK_BANNER_POSITION = 5 / 7  # 5/7 down the video
 WATERMARK_PADDING = 105
 WATERMARK_TARGET_WIDTH = 1080
 WATERMARK_TARGET_HEIGHT = 1920
-WATERMARK_FONT_PATH = "/System/Library/Fonts/Supplemental/Arial Black.ttf"
+WATERMARK_FONT_PATH = (
+    "/System/Library/Fonts/Supplemental/Arial Black.ttf"
+    if platform.system() == "Darwin"
+    else "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+)
 
 # Thread-safe print lock
 print_lock = threading.Lock()
@@ -480,6 +485,46 @@ GEMINI_MODELS = [
 ]
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIMENSIONS = 768
+VIDEO_CATEGORIES = [
+    "pov_glasses",
+    "selfie",
+    "news_clip",
+    "screen_recording",
+    "handheld_phone",
+    "professional_edit",
+    "talking_head",
+    "gaming",
+    "slideshow_or_text",
+    "animation",
+    "other",
+]
+
+GEMINI_CLASSIFY_PROMPT = """Watch this video carefully and classify it into EXACTLY ONE of these categories:
+
+pov_glasses — First-person POV filmed from streaming glasses or a head-mounted wearable camera (Ray-Ban Meta, Spectacles, etc.). The camera sits at eye level and moves naturally with the wearer's head. You see the world from their perspective as they walk, look around, or interact. Often has subtle head-bob motion. Hands may appear in frame without holding anything.
+
+selfie — Front-facing camera pointed at the person filming. The subject is looking into the camera, often at arm's length or on a selfie stick. Includes "talking to camera" and GRWM-style videos.
+
+news_clip — Broadcast news footage, TV screen recordings of news, or journalist-style reporting. Professional graphics, chyrons, or news tickers visible.
+
+screen_recording — Recording of a phone screen, computer screen, or app interface. Shows UI elements, notifications, or app content.
+
+handheld_phone — Filmed on a phone held in someone's hand (rear camera). You can often tell by the framing, stabilization style, or the fact that the camera moves differently from head-mounted footage. Includes tripod shots.
+
+professional_edit — Professionally shot or heavily edited content. Cinematic angles, multiple camera cuts, color grading, transitions, or polished production.
+
+talking_head — Someone speaking to camera from a fixed position (podcast-style, commentary, reaction). Camera is stationary on a desk/tripod.
+
+gaming — Video game footage, gameplay recordings, or gaming streams.
+
+slideshow_or_text — Primarily text overlays, photo slideshows, or static images with music.
+
+animation — Animated content, cartoons, or CGI.
+
+other — Anything that doesn't fit the above categories.
+
+Respond with ONLY the category name, nothing else."""
+
 GEMINI_PROMPT = """Analyze this video and return the following in plain text (no markdown formatting):
 
 SUMMARY:
@@ -513,36 +558,34 @@ def get_gemini_client() -> genai.Client:
         return _gemini_client
 
 
-def generate_video_summary(file_path: str, video_id: str) -> str | None:
-    """Upload video to Gemini and get an AI summary. Retries on rate limits, falls back to other models."""
+def _upload_to_gemini(file_path: str, video_id: str):
+    """Upload video to Gemini and wait for it to be active. Returns (client, uploaded_file) or (None, None)."""
     try:
         client = get_gemini_client()
         uploaded = client.files.upload(file=file_path)
         for _ in range(60):
             status = client.files.get(name=uploaded.name)
             if status.state.name == "ACTIVE":
-                break
+                return client, uploaded
             time.sleep(2)
-        else:
-            thread_print(f"   [{video_id}] Gemini file processing timed out")
-            return None
+        thread_print(f"   [{video_id}] Gemini file processing timed out")
+        return None, None
     except Exception as e:
         thread_print(f"   [{video_id}] Gemini upload error: {e}")
-        return None
+        return None, None
 
+
+def _gemini_generate(client, uploaded, prompt: str, video_id: str) -> str | None:
+    """Run a prompt against an uploaded Gemini file. Tries all models with retries."""
     last_error = None
     for model in GEMINI_MODELS:
         for attempt in range(3):
             try:
                 response = client.models.generate_content(
                     model=model,
-                    contents=[uploaded, GEMINI_PROMPT],
+                    contents=[uploaded, prompt],
                 )
                 thread_print(f"   [{video_id}] Used model: {model}")
-                try:
-                    client.files.delete(name=uploaded.name)
-                except Exception:
-                    pass
                 return response.text
             except Exception as e:
                 last_error = e
@@ -556,11 +599,59 @@ def generate_video_summary(file_path: str, video_id: str) -> str | None:
                     break
 
     thread_print(f"   [{video_id}] All models failed: {last_error}")
+    return None
+
+
+def classify_video(file_path: str, video_id: str) -> str:
+    """Classify a video into a category using Gemini.
+    Returns the category string (e.g. 'pov_glasses', 'selfie', 'news_clip', etc.)
+    or 'unknown' on failure.
+    """
+    client, uploaded = _upload_to_gemini(file_path, video_id)
+    if not client or not uploaded:
+        thread_print(f"   [{video_id}] Classification: upload failed")
+        return "unknown"
+
+    result = _gemini_generate(client, uploaded, GEMINI_CLASSIFY_PROMPT, video_id)
+
+    if not result:
+        thread_print(f"   [{video_id}] Classification: generation failed")
+        try:
+            client.files.delete(name=uploaded.name)
+        except Exception:
+            pass
+        return "unknown"
+
+    category = result.strip().lower().replace(" ", "_")
+    if category not in VIDEO_CATEGORIES:
+        thread_print(f"   [{video_id}] Classification: unrecognized category {category!r}, treating as 'other'")
+        category = "other"
+    else:
+        thread_print(f"   [{video_id}] Classification: {category}")
+
+    if category != "pov_glasses":
+        try:
+            client.files.delete(name=uploaded.name)
+        except Exception:
+            pass
+
+    return category
+
+
+def generate_video_summary(file_path: str, video_id: str) -> str | None:
+    """Upload video to Gemini and get an AI summary. Retries on rate limits, falls back to other models."""
+    client, uploaded = _upload_to_gemini(file_path, video_id)
+    if not client or not uploaded:
+        return None
+
+    result = _gemini_generate(client, uploaded, GEMINI_PROMPT, video_id)
+
     try:
         client.files.delete(name=uploaded.name)
     except Exception:
         pass
-    return None
+
+    return result
 
 
 def generate_embedding(text: str, video_id: str) -> list[float] | None:
@@ -620,6 +711,14 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
             local_path, file_size = download_result
             thread_print(f"   [{video_id}] Downloaded: {file_size / 1024 / 1024:.1f} MB")
             
+            # Classify video type
+            thread_print(f"   [{video_id}] Classifying video...")
+            video_category = classify_video(local_path, video_id)
+            if video_category != "pov_glasses":
+                thread_print(f"   [{video_id}] Not POV glasses (classified as '{video_category}'), skipping")
+                result["error"] = f"Classified as {video_category}"
+                return result
+            
             # Generate AI summary with Gemini
             thread_print(f"   [{video_id}] Generating AI summary...")
             video_summary = generate_video_summary(local_path, video_id)
@@ -655,6 +754,11 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
             
             thread_print(f"   [{video_id}] Creating watermarked version...")
             if add_watermark(local_path, watermarked_path, author):
+                # Original no longer needed after watermarking
+                if local_path and os.path.exists(local_path):
+                    os.remove(local_path)
+                    local_path = None
+                
                 watermarked_size = os.path.getsize(watermarked_path)
                 thread_print(f"   [{video_id}] Watermarked: {watermarked_size / 1024 / 1024:.1f} MB")
                 
@@ -663,6 +767,11 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
                     watermarked_path,
                     passthrough=f"tiktok:{video_id}:{category}:logod",
                 )
+                
+                # Watermarked file no longer needed after upload
+                if watermarked_path and os.path.exists(watermarked_path):
+                    os.remove(watermarked_path)
+                    watermarked_path = None
                 
                 logod_mux_asset_id = logod_mux_result.get("data", {}).get("id")
                 thread_print(f"   [{video_id}] Logod Mux Asset: {logod_mux_asset_id}")
@@ -735,8 +844,31 @@ def run_backfills():
             print(f"   Backfill {name} exited with code {result.returncode}")
 
 
+def cleanup_temp_files():
+    """Remove stale video files from temp directory left by interrupted runs."""
+    import glob
+    temp_dir = tempfile.gettempdir()
+    patterns = [
+        os.path.join(temp_dir, "tiktok_*.mp4"),
+        os.path.join(temp_dir, "gemini_*.mp4"),
+    ]
+    removed = 0
+    freed = 0
+    for pattern in patterns:
+        for path in glob.glob(pattern):
+            try:
+                freed += os.path.getsize(path)
+                os.remove(path)
+                removed += 1
+            except OSError:
+                pass
+    if removed:
+        print(f"Cleaned up {removed} stale temp files ({freed / 1024 / 1024:.0f} MB)")
+
+
 def main(count: int = 10, reprocess_existing: bool = False, max_workers: int = 4):
     """Main function with multithreading support."""
+    cleanup_temp_files()
     run_backfills()
 
     print(f"\n{'='*50}")

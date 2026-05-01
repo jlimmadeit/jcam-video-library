@@ -208,22 +208,22 @@ def process_video(video: dict, index: int, total: int) -> bool:
     if not mp4_path:
         return False
 
-    try:
-        summary = analyze_video(mp4_path, vid)
-        if summary:
-            embedding = generate_embedding(summary, vid)
-            update_video(video["id"], summary, embedding)
-            preview = summary[:120].replace("\n", " ")
-            thread_print(f"   [{vid}] Summary: {preview}...")
-            if embedding:
-                thread_print(f"   [{vid}] Embedding: {EMBEDDING_DIMENSIONS}d vector generated")
-            return True
-        else:
-            thread_print(f"   [{vid}] No summary returned")
-            return False
-    finally:
-        if os.path.exists(mp4_path):
-            os.remove(mp4_path)
+    summary = analyze_video(mp4_path, vid)
+    # Done with video file after analysis — delete immediately
+    if os.path.exists(mp4_path):
+        os.remove(mp4_path)
+
+    if summary:
+        embedding = generate_embedding(summary, vid)
+        update_video(video["id"], summary, embedding)
+        preview = summary[:120].replace("\n", " ")
+        thread_print(f"   [{vid}] Summary: {preview}...")
+        if embedding:
+            thread_print(f"   [{vid}] Embedding: {EMBEDDING_DIMENSIONS}d vector generated")
+        return True
+    else:
+        thread_print(f"   [{vid}] No summary returned")
+        return False
 
 
 def main(max_workers: int = 3):
