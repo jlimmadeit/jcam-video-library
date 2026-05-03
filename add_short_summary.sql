@@ -1,23 +1,13 @@
--- Enable pgvector extension
-CREATE EXTENSION IF NOT EXISTS vector;
-
--- Card title from full Gemini summary (optional; UI falls back to search_keyword)
+-- Short card title derived from Gemini video_summary (4–8 words)
 ALTER TABLE videos ADD COLUMN IF NOT EXISTS short_summary TEXT;
 
--- Add embedding column (768 dimensions via gemini-embedding-001)
-ALTER TABLE videos ADD COLUMN IF NOT EXISTS summary_embedding vector(768);
+COMMENT ON COLUMN videos.short_summary IS 'Very short display label (4–8 words) distilled from video_summary; UI falls back to search_keyword';
 
--- IVFFlat index for fast cosine similarity search
--- Use lists = sqrt(n) as a starting point; 10 is fine for < 1000 videos
-CREATE INDEX IF NOT EXISTS idx_videos_summary_embedding
-    ON videos USING ivfflat (summary_embedding vector_cosine_ops)
-    WITH (lists = 10);
-
--- RPC function: search videos by embedding similarity
--- Returns logod_videos joined with parent videos, ranked by cosine similarity
+-- Output row shape changed; drop old signature if present (float = real in some catalogs)
 DROP FUNCTION IF EXISTS search_videos_by_embedding(vector(768), double precision, integer);
 DROP FUNCTION IF EXISTS search_videos_by_embedding(vector(768), real, integer);
 
+-- Embedding search: expose short_summary for grid / modal
 CREATE OR REPLACE FUNCTION search_videos_by_embedding(
     query_embedding vector(768),
     match_threshold float DEFAULT 0.3,

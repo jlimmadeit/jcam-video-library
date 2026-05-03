@@ -40,6 +40,17 @@ TIKTOK_SEARCH_URL = f"https://{TIKTOK_API_HOST}/api/search/general"
 TIKTOK_MAX_QUALITY_HOST = "tiktok-max-quality.p.rapidapi.com"
 TIKTOK_MAX_QUALITY_URL = f"https://{TIKTOK_MAX_QUALITY_HOST}/download"
 
+
+def tiktok_api_duration_to_seconds(duration) -> float | None:
+    """TikTok search/item ``video.duration`` from RapidAPI is in milliseconds."""
+    if duration is None:
+        return None
+    try:
+        return float(duration) / 1000.0
+    except (TypeError, ValueError):
+        return None
+
+
 # Watermark settings
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "j cam logo black.png")
 WATERMARK_BANNER_HEIGHT = 100
@@ -228,7 +239,7 @@ def search_tiktok(keyword: str, count: int = 10) -> list[dict]:
                 "view_count": stats.get("playCount") or stats.get("viewCount"),
                 "width": video.get("width"),
                 "height": video.get("height"),
-                "duration": video.get("duration"),
+                "duration": tiktok_api_duration_to_seconds(video.get("duration")),
                 "created_at": created_at,
             }
             videos.append(video_info)
@@ -372,7 +383,16 @@ def update_db_status(table: str, id_column: str, id_value: str, mux_data: dict):
     supabase.table(table).update(update_data).eq(id_column, id_value).execute()
 
 
-def save_to_supabase(video: dict, keyword: str, category: str, mux_data: dict, upsert: bool = False, video_summary: str = None, summary_embedding: list[float] = None) -> dict:
+def save_to_supabase(
+    video: dict,
+    keyword: str,
+    category: str,
+    mux_data: dict,
+    upsert: bool = False,
+    video_summary: str = None,
+    summary_embedding: list[float] = None,
+    short_summary: str = None,
+) -> dict:
     """Save video record to Supabase. If upsert=True, updates existing record."""
     supabase = get_supabase()
     mux_asset = mux_data.get("data", {})
@@ -408,6 +428,8 @@ def save_to_supabase(video: dict, keyword: str, category: str, mux_data: dict, u
         record["video_summary"] = video_summary
     if summary_embedding:
         record["summary_embedding"] = summary_embedding
+    if short_summary:
+        record["short_summary"] = short_summary
 
     if upsert:
         response = supabase.table("videos").upsert(record, on_conflict="tiktok_video_id").execute()
@@ -524,6 +546,14 @@ List comma-separated keywords/phrases for general search. Include topics, action
 TEXT AND SPEECH:
 List every word or phrase of text that appears visually in the video (overlays, captions, signs, watermarks, etc.) AND any spoken words or lyrics you can identify. Separate with commas. If none, write "none".
 """
+
+SHORT_SUMMARY_INSTRUCTION = """You are given an AI analysis of a short social video (description, keywords, and notes).
+
+Reply with ONE line only: a readable label of 4 to 8 words (inclusive) that captures what the video is mainly about.
+Rules:
+- Plain words only, no leading/trailing punctuation, no quotation marks.
+- Do not include hashtags or @mentions.
+- Count words carefully: minimum 4 words, maximum 8 words."""
 
 _gemini_client_lock = threading.Lock()
 _gemini_client = None
@@ -655,6 +685,64 @@ def generate_embedding(text: str, video_id: str) -> list[float] | None:
         return None
 
 
+def _clean_short_summary_line(text: str) -> str:
+    s = (text or "").strip()
+    s = s.split("\n")[0].strip()
+    s = s.strip(" \t\"'«»`")
+    s = re.sub(r"^[\d#\-*.]+\s*", "", s)
+    return s.strip()
+
+
+def _coerce_short_summary_label(raw: str) -> str | None:
+    s = _clean_short_summary_line(raw)
+    if not s:
+        return None
+    words = s.split()
+    if len(words) > 8:
+        s = " ".join(words[:8])
+    words = s.split()
+    if len(words) < 4:
+        return None
+    return s
+
+
+def generate_short_summary_from_text(video_summary: str, video_id: str) -> str | None:
+    """Distill full Gemini summary to a 4–8 word label (text-only, no video upload)."""
+    if not (video_summary or "").strip():
+        return None
+    client = get_gemini_client()
+    base = f"{SHORT_SUMMARY_INSTRUCTION}\n\n---\n\n{video_summary.strip()}"
+    retry_extra = (
+        "\n\nYour last line was not 4–8 words. Reply with exactly one line, 4 to 8 words, plain text only."
+    )
+    last_error = None
+    for model in GEMINI_MODELS:
+        for attempt in range(3):
+            body = base if attempt == 0 else base + retry_extra
+            try:
+                response = client.models.generate_content(model=model, contents=body)
+                text = (response.text or "").strip()
+                out = _coerce_short_summary_label(text)
+                if out:
+                    thread_print(f"   [{video_id}] Short summary model: {model}")
+                    return out
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    wait = 20 * (attempt + 1)
+                    thread_print(f"   [{video_id}] short summary {model} rate limited, sleep {wait}s…")
+                    time.sleep(wait)
+                elif "503" in err_str or "UNAVAILABLE" in err_str:
+                    thread_print(f"   [{video_id}] short summary {model} unavailable, next model…")
+                    break
+                else:
+                    thread_print(f"   [{video_id}] short summary {model} error: {e}")
+                    break
+    thread_print(f"   [{video_id}] Short summary failed: {last_error}")
+    return None
+
+
 def process_single_video(video: dict, keyword: str, category: str, is_existing: bool, index: int) -> dict:
     """Process a single video: download, upload to Mux, create watermarked version, save to Supabase."""
     video_id = video.get("id")
@@ -708,12 +796,16 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
             thread_print(f"   [{video_id}] Generating AI summary...")
             video_summary = generate_video_summary(local_path, video_id)
             summary_embedding = None
+            short_summary = None
             if video_summary:
                 preview = video_summary[:80].replace("\n", " ")
                 thread_print(f"   [{video_id}] Summary: {preview}...")
                 summary_embedding = generate_embedding(video_summary, video_id)
                 if summary_embedding:
                     thread_print(f"   [{video_id}] Embedding: {EMBEDDING_DIMENSIONS}d vector generated")
+                short_summary = generate_short_summary_from_text(video_summary, video_id)
+                if short_summary:
+                    thread_print(f"   [{video_id}] Short: {short_summary}")
             else:
                 thread_print(f"   [{video_id}] Summary generation failed, continuing...")
             
@@ -727,7 +819,16 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
             thread_print(f"   [{video_id}] Mux Asset: {mux_asset_id}")
             
             # Save original to Supabase
-            db_record = save_to_supabase(video, keyword, category, mux_result, upsert=is_existing, video_summary=video_summary, summary_embedding=summary_embedding)
+            db_record = save_to_supabase(
+                video,
+                keyword,
+                category,
+                mux_result,
+                upsert=is_existing,
+                video_summary=video_summary,
+                summary_embedding=summary_embedding,
+                short_summary=short_summary,
+            )
             thread_print(f"   [{video_id}] Saved to DB: {db_record['id']}")
             
             result["success"] = True

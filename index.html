@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>j.cam Video Library</title>
+    <link rel="preconnect" href="https://stream.mux.com" crossorigin>
+    <link rel="preconnect" href="https://image.mux.com" crossorigin>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <style>
@@ -47,10 +49,152 @@
             letter-spacing: 2px;
         }
 
+        .library-controls-sticky {
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            margin: 0 -20px 20px;
+            padding: 12px 20px 14px;
+            background: rgba(10, 10, 10, 0.94);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid #252525;
+        }
+
+        .library-controls-inner {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
         .search-container {
-            max-width: 600px;
-            margin: 0 auto 40px;
             position: relative;
+            margin-bottom: 12px;
+        }
+
+        .filters-panel {
+            margin-bottom: 10px;
+        }
+
+        .filters-panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+
+        .filters-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .filters-actions .refresh-catalog-btn {
+            padding: 8px 12px;
+            font-size: 0.82rem;
+        }
+
+        .filters-panel-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #666;
+        }
+
+        .filters-reset {
+            padding: 4px 10px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: #e63946;
+            background: transparent;
+            border: 1px solid #333;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        .filters-reset:hover {
+            border-color: #e63946;
+            color: #ff5c6c;
+        }
+
+        .filters-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px 12px;
+        }
+
+        @media (min-width: 720px) {
+            .filters-grid {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+        }
+
+        .filter-field label {
+            display: block;
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #777;
+            margin-bottom: 4px;
+        }
+
+        .filter-field select {
+            width: 100%;
+            padding: 8px 10px;
+            font-size: 0.88rem;
+            border: 2px solid #333;
+            border-radius: 10px;
+            background: #141414;
+            color: #fff;
+            cursor: pointer;
+        }
+
+        .filter-field select:focus {
+            outline: none;
+            border-color: #e63946;
+        }
+
+        .library-controls-sticky .stats {
+            margin-bottom: 0;
+            font-size: 0.82rem;
+            color: #777;
+        }
+
+        .refresh-catalog-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 16px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            border: 2px solid #333;
+            border-radius: 10px;
+            background: #111;
+            color: #fff;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s, color 0.2s;
+            white-space: nowrap;
+        }
+
+        .refresh-catalog-btn:hover {
+            border-color: #e63946;
+            background: #1a1a1a;
+        }
+
+        .refresh-catalog-btn:focus {
+            outline: none;
+            border-color: #e63946;
+            box-shadow: 0 0 0 3px rgba(230, 57, 70, 0.2);
+        }
+
+        .refresh-catalog-btn svg {
+            flex-shrink: 0;
+            opacity: 0.9;
         }
 
         .search-input {
@@ -85,7 +229,6 @@
         .stats {
             text-align: center;
             color: #666;
-            margin-bottom: 20px;
             font-size: 0.9rem;
         }
 
@@ -103,6 +246,12 @@
             cursor: pointer;
             background: #1a1a1a;
             transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .catalog-sentinel {
+            grid-column: 1 / -1;
+            height: 80px;
+            pointer-events: none;
         }
 
         .video-card:hover {
@@ -155,9 +304,36 @@
         .video-card .keyword {
             font-size: 0.8rem;
             color: #ccc;
-            white-space: nowrap;
+            line-height: 1.35;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            line-clamp: 2;
             overflow: hidden;
-            text-overflow: ellipsis;
+            overflow-wrap: anywhere;
+            margin-bottom: 8px;
+        }
+
+        .video-card-stats {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            row-gap: 6px;
+            font-size: 0.72rem;
+            color: #aaa;
+        }
+
+        .video-card-stats .stat {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            min-width: 0;
+        }
+
+        .video-card-stats .stat svg {
+            flex-shrink: 0;
+            opacity: 0.85;
         }
 
         .video-card .play-icon {
@@ -313,11 +489,37 @@
             }
         }
 
+        .modal-video-wrap {
+            position: relative;
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            background: #000;
+        }
+
         .modal-video {
             width: 100%;
             flex: 1;
             min-height: 0;
             background: #000;
+            object-fit: contain;
+        }
+
+        .modal-download-count {
+            position: absolute;
+            right: 12px;
+            bottom: 12px;
+            z-index: 5;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #fff;
+            background: rgba(0, 0, 0, 0.72);
+            backdrop-filter: blur(6px);
+            pointer-events: none;
+            line-height: 1.2;
         }
 
         .modal-info {
@@ -331,6 +533,13 @@
             font-size: 1rem;
             margin-bottom: 12px;
             color: #fff;
+            line-height: 1.35;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            line-clamp: 2;
+            overflow: hidden;
+            overflow-wrap: anywhere;
         }
 
         .modal-info #downloadArea {
@@ -654,19 +863,78 @@
 
     <div class="container">
         <header>
-            <img src="j%20cam%20logo%20black.png" alt="jcam.app" class="logo">
+            <img src="j%20cam%20logo%20white.png" alt="jcam.app" class="logo">
             <h2>Video Library</h2>
         </header>
 
-        <div class="search-container">
-            <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <path d="m21 21-4.35-4.35"></path>
-            </svg>
-            <input type="text" class="search-input" id="searchInput" placeholder="Search by description, keyword, category, or hashtag...">
+        <div class="library-controls-sticky">
+            <div class="library-controls-inner">
+                <div class="search-container">
+                    <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <path d="m21 21-4.35-4.35"></path>
+                    </svg>
+                    <input type="text" class="search-input" id="searchInput" placeholder="Search by description, keyword, category, or hashtag...">
+                </div>
+                <div class="filters-panel">
+                    <div class="filters-panel-head">
+                        <span class="filters-panel-title">Optional filters</span>
+                        <div class="filters-actions">
+                            <button type="button" class="filters-reset" id="filtersResetBtn">Clear filters</button>
+                            <button type="button" class="refresh-catalog-btn" id="shuffleCatalogBtn" title="Randomize the order of videos on this page" aria-label="Shuffle video order">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <polyline points="16 3 21 3 21 8"></polyline>
+                                    <line x1="4" y1="20" x2="21" y2="3"></line>
+                                    <polyline points="21 16 21 21 16 21"></polyline>
+                                    <line x1="15" y1="15" x2="21" y2="21"></line>
+                                    <line x1="4" y1="4" x2="9" y2="9"></line>
+                                </svg>
+                                Shuffle
+                            </button>
+                        </div>
+                    </div>
+                    <div class="filters-grid">
+                        <div class="filter-field">
+                            <label for="filterCategory">Category</label>
+                            <select id="filterCategory" aria-label="Filter by category">
+                                <option value="">All categories</option>
+                            </select>
+                        </div>
+                        <div class="filter-field">
+                            <label for="filterDuration">Duration</label>
+                            <select id="filterDuration" aria-label="Filter by video length">
+                                <option value="any">Any length</option>
+                                <option value="lt30">Under 30s</option>
+                                <option value="30-60">30s – 1 min</option>
+                                <option value="60-180">1 – 3 min</option>
+                                <option value="180p">3 min or longer</option>
+                            </select>
+                        </div>
+                        <div class="filter-field">
+                            <label for="filterEngagement">Engagement</label>
+                            <select id="filterEngagement" aria-label="Filter by engagement rate">
+                                <option value="all">Any</option>
+                                <option value="high">High (≥ 5%)</option>
+                                <option value="mid">Medium (1% – &lt; 5%)</option>
+                                <option value="low">Lower (&lt; 1%)</option>
+                                <option value="unknown">No views / unknown</option>
+                            </select>
+                        </div>
+                        <div class="filter-field">
+                            <label for="filterViews">Views</label>
+                            <select id="filterViews" aria-label="Filter by TikTok view count">
+                                <option value="any">Any views</option>
+                                <option value="lt10k">Under 10K</option>
+                                <option value="10k-100k">10K – 100K</option>
+                                <option value="100k-1m">100K – 1M</option>
+                                <option value="1mp">1M or more</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="stats" id="stats"></div>
+            </div>
         </div>
-
-        <div class="stats" id="stats"></div>
 
         <div id="videoGrid" class="video-grid">
             <div class="loading">
@@ -681,7 +949,10 @@
         <button class="modal-nav prev" id="modalPrev" title="Previous video">&#8249;</button>
         <div class="modal-content">
             <button class="modal-close" id="modalClose">&times;</button>
-            <video class="modal-video" id="modalVideo" controls playsinline></video>
+            <div class="modal-video-wrap">
+                <video class="modal-video" id="modalVideo" controls playsinline preload="metadata"></video>
+                <div class="modal-download-count" id="modalDownloadCount" aria-live="polite"></div>
+            </div>
             <div class="modal-info">
                 <h3 id="modalKeyword"></h3>
                 <div id="downloadArea"></div>
@@ -724,13 +995,554 @@
 
         const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+        const VIDEO_PAGE_SIZE = 16;
+        /** Library buckets from ``keywords.csv``; always shown in the category filter. */
+        const CANONICAL_CATALOG_CATEGORIES = ['dating', 'lifestyle', 'comedy', 'sports'];
+
+        // List payload: omit long text fields (description, summary) — fetched when a video is opened.
+        const VIDEO_LIST_SELECT = `
+            id,
+            mux_playback_id,
+            mux_thumbnail_url,
+            mux_playback_url,
+            mux_gif_url,
+            status,
+            video_id,
+            duration_seconds,
+            download_count,
+            videos (
+                tiktok_hashtags,
+                search_keyword,
+                short_summary,
+                category,
+                tiktok_view_count,
+                tiktok_like_count,
+                tiktok_comment_count,
+                tiktok_share_count
+            )
+        `;
+        const VIDEO_DETAIL_SELECT = `
+            id,
+            mux_playback_id,
+            mux_thumbnail_url,
+            mux_playback_url,
+            mux_gif_url,
+            status,
+            video_id,
+            download_count,
+            videos (
+                tiktok_description,
+                tiktok_hashtags,
+                search_keyword,
+                short_summary,
+                category,
+                video_summary
+            )
+        `;
+
         let allVideos = [];
         let displayedVideos = [];
         let currentVideo = null;
         let currentUser = null;
         let authMode = 'login';
-
+        let hasMoreCatalog = false;
+        let catalogLoading = false;
+        let catalogObserver = null;
+        let modalHls = null;
+        let modalPlaybackAbort = null;
         const ADMIN_EMAILS = ['limjoe25@gmail.com'];
+
+        function escapeHtmlAttr(s) {
+            return String(s ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        /** Grid + modal headline: AI short label, else TikTok search keyword. */
+        function videoCardTitle(v) {
+            const s = (v && (v.short_summary || v.search_keyword)) || '';
+            const t = String(s).trim();
+            return t || 'Video';
+        }
+
+        function destroyModalHls() {
+            if (modalHls) {
+                modalHls.destroy();
+                modalHls = null;
+            }
+        }
+
+        function videoListQueryBase(selectClause) {
+            return db
+                .from('logod_videos')
+                .select(selectClause)
+                .not('mux_playback_id', 'is', null)
+                .neq('is_hidden', true);
+        }
+
+        function videoListQuery() {
+            return videoListQueryBase(VIDEO_LIST_SELECT).order('created_at', { ascending: false });
+        }
+
+        function withTimeout(promise, ms, label) {
+            return Promise.race([
+                promise,
+                new Promise((_, reject) =>
+                    setTimeout(
+                        () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)),
+                        ms
+                    )
+                ),
+            ]);
+        }
+
+        /** Smaller stills for the grid (Mux on-the-fly resize). */
+        function gridThumbnailUrl(url) {
+            if (!url || !String(url).includes('image.mux.com')) return url;
+            try {
+                const u = new URL(url);
+                u.searchParams.set('width', '260');
+                u.searchParams.set('height', '462');
+                if (!u.searchParams.has('fit_mode')) u.searchParams.set('fit_mode', 'smartcrop');
+                return u.toString();
+            } catch {
+                return url;
+            }
+        }
+
+        /** Lighter animated preview than DB default (320×10fps×4s). */
+        function gridGifPreviewUrl(playbackId) {
+            if (!playbackId) return '';
+            return `https://image.mux.com/${encodeURIComponent(playbackId)}/animated.webp?width=200&fps=8&end=3`;
+        }
+
+        function syncModalDownloadCount() {
+            const el = document.getElementById('modalDownloadCount');
+            if (!el || !currentVideo) return;
+            const n = Math.max(0, Number(currentVideo.download_count) || 0);
+            el.textContent = n === 1 ? '1 download' : `${n} downloads`;
+        }
+
+        function applyModalTextFromVideo(video) {
+            const v = video.videos || {};
+            document.getElementById('modalKeyword').textContent = videoCardTitle(v);
+            const desc = v.tiktok_description;
+            document.getElementById('modalDescription').textContent =
+                desc === undefined || desc === null ? 'Loading…' : desc || 'No description';
+
+            const hashtagsEl = document.getElementById('modalHashtags');
+            const hashtags = v.tiktok_hashtags || [];
+            hashtagsEl.innerHTML = hashtags.map((tag) => `<span class="hashtag">#${tag}</span>`).join('');
+
+            const summaryEl = document.getElementById('modalSummary');
+            summaryEl.textContent = v.video_summary || '';
+            summaryEl.style.display = v.video_summary ? '' : 'none';
+
+            syncModalDownloadCount();
+        }
+
+        async function enrichLogodVideoRow(video) {
+            const v = video.videos || {};
+            if (Object.prototype.hasOwnProperty.call(v, 'tiktok_description') || Object.prototype.hasOwnProperty.call(v, 'video_summary')) return;
+
+            try {
+                const { data, error } = await withTimeout(
+                    db.from('logod_videos').select(VIDEO_DETAIL_SELECT).eq('id', video.id).maybeSingle(),
+                    30000,
+                    'Loading video details'
+                );
+                if (error || !data) return;
+
+                const merged = { ...(video.videos || {}), ...(data.videos || {}) };
+                video.videos = merged;
+
+                if (currentVideo && currentVideo.id === video.id) {
+                    currentVideo.videos = merged;
+                    if (data.download_count != null) currentVideo.download_count = data.download_count;
+                    applyModalTextFromVideo(currentVideo);
+                }
+            } catch (e) {
+                console.warn('enrichLogodVideoRow:', e);
+                if (currentVideo && currentVideo.id === video.id) {
+                    document.getElementById('modalDescription').textContent = 'Could not load description.';
+                }
+            }
+        }
+
+        function bindVideoCard(card) {
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('.hide-btn')) return;
+                openModal(card.dataset.id);
+            });
+            card.addEventListener('mouseenter', () => {
+                const gif = card.querySelector('.gif-preview');
+                if (gif && !gif.src) {
+                    gif.src = gif.dataset.src;
+                }
+            });
+        }
+
+        /** TikTok API duration was stored as ms in ``duration_seconds`` for older rows. */
+        function normalizeDisplayDurationSeconds(raw) {
+            if (raw == null || raw === '') return null;
+            const n = Number(raw);
+            if (!Number.isFinite(n) || n < 0) return null;
+            if (n > 3600) return n / 1000;
+            return n;
+        }
+
+        function formatCardDuration(sec) {
+            const n = normalizeDisplayDurationSeconds(sec);
+            if (n == null) return '—';
+            const s = Math.floor(n + 0.5);
+            const m = Math.floor(s / 60);
+            const r = s % 60;
+            return `${m}:${String(r).padStart(2, '0')}`;
+        }
+
+        function formatCardViews(n) {
+            if (n == null || n === '') return '—';
+            const num = Number(n);
+            if (!Number.isFinite(num) || num < 0) return '—';
+            if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
+            if (num >= 10_000) return `${Math.round(num / 1_000)}K`;
+            if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
+            return String(Math.round(num));
+        }
+
+        /** Engagement rate: (likes + comments + shares) / views. Returns null if undefined or views ≤ 0. */
+        function engagementPercentFromVideoRow(v) {
+            const views = Number(v?.tiktok_view_count);
+            if (!Number.isFinite(views) || views <= 0) return null;
+            const likes = Number(v?.tiktok_like_count) || 0;
+            const comments = Number(v?.tiktok_comment_count) || 0;
+            const shares = Number(v?.tiktok_share_count) || 0;
+            const pct = ((likes + comments + shares) / views) * 100;
+            return Number.isFinite(pct) ? pct : null;
+        }
+
+        function formatEngagementPct(p) {
+            if (p == null || !Number.isFinite(p)) return '—';
+            if (p >= 100) return `${Math.round(p)}%`;
+            if (p >= 10) return `${p.toFixed(1)}%`;
+            return `${p.toFixed(2)}%`;
+        }
+
+        function matchesEngagementCut(video, cut) {
+            if (cut === 'all') return true;
+            const v = video.videos || {};
+            const p = engagementPercentFromVideoRow(v);
+            if (cut === 'unknown') return p === null;
+            if (p === null) return false;
+            if (cut === 'high') return p >= 5;
+            if (cut === 'mid') return p >= 1 && p < 5;
+            if (cut === 'low') return p < 1;
+            return true;
+        }
+
+        function getCatalogFilterState() {
+            return {
+                category: (document.getElementById('filterCategory')?.value || '').trim(),
+                duration: document.getElementById('filterDuration')?.value || 'any',
+                engagement: document.getElementById('filterEngagement')?.value || 'all',
+                views: document.getElementById('filterViews')?.value || 'any',
+            };
+        }
+
+        function catalogFiltersAreDefault() {
+            const f = getCatalogFilterState();
+            return !f.category && f.duration === 'any' && f.engagement === 'all' && f.views === 'any';
+        }
+
+        function activeFiltersSummary() {
+            const f = getCatalogFilterState();
+            const parts = [];
+            if (f.category) parts.push(categoryFilterOptionLabel(f.category));
+            const durLabels = {
+                lt30: 'Under 30s',
+                '30-60': '30s–1m',
+                '60-180': '1–3m',
+                '180p': '3m+',
+            };
+            if (f.duration !== 'any') parts.push(durLabels[f.duration] || f.duration);
+            const engSel = document.getElementById('filterEngagement');
+            if (f.engagement !== 'all' && engSel) {
+                const opt = engSel.selectedOptions?.[0];
+                if (opt) parts.push(opt.textContent.trim());
+            }
+            const viewLabels = {
+                lt10k: '<10K views',
+                '10k-100k': '10K–100K',
+                '100k-1m': '100K–1M',
+                '1mp': '1M+ views',
+            };
+            if (f.views !== 'any') parts.push(viewLabels[f.views] || f.views);
+            return parts.join(' · ');
+        }
+
+        function matchesCatalogFilters(video, f) {
+            const v = video.videos || {};
+            if (f.category) {
+                const cat = (v.category != null && String(v.category).trim()) || '';
+                if (cat.toLowerCase() !== f.category.toLowerCase()) return false;
+            }
+            const dur = normalizeDisplayDurationSeconds(video.duration_seconds);
+            if (f.duration !== 'any') {
+                if (dur == null || !Number.isFinite(dur)) return false;
+                if (f.duration === 'lt30' && dur >= 30) return false;
+                if (f.duration === '30-60' && (dur < 30 || dur >= 60)) return false;
+                if (f.duration === '60-180' && (dur < 60 || dur >= 180)) return false;
+                if (f.duration === '180p' && dur < 180) return false;
+            }
+            if (!matchesEngagementCut(video, f.engagement)) return false;
+            const views = Number(v.tiktok_view_count);
+            if (f.views !== 'any') {
+                if (!Number.isFinite(views)) return false;
+                if (f.views === 'lt10k' && views >= 10_000) return false;
+                if (f.views === '10k-100k' && (views < 10_000 || views >= 100_000)) return false;
+                if (f.views === '100k-1m' && (views < 100_000 || views >= 1_000_000)) return false;
+                if (f.views === '1mp' && views < 1_000_000) return false;
+            }
+            return true;
+        }
+
+        function applyCatalogFilters(videos) {
+            const f = getCatalogFilterState();
+            if (catalogFiltersAreDefault()) return videos;
+            return videos.filter((vid) => matchesCatalogFilters(vid, f));
+        }
+
+        function catalogVideosForGrid() {
+            return applyCatalogFilters(allVideos);
+        }
+
+        function categoryFilterOptionLabel(key) {
+            return String(key || '')
+                .split(/[_\s]+/)
+                .filter(Boolean)
+                .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+                .join(' ');
+        }
+
+        function rebuildCategoryFilterOptions() {
+            const sel = document.getElementById('filterCategory');
+            if (!sel) return;
+            const prevLower = (sel.value || '').trim().toLowerCase();
+            const fromDb = new Set();
+            for (const row of allVideos) {
+                const c = (row.videos && row.videos.category && String(row.videos.category).trim()) || '';
+                if (c) fromDb.add(c.toLowerCase());
+            }
+            const seen = new Set();
+            const ordered = [];
+            for (const c of CANONICAL_CATALOG_CATEGORIES) {
+                const key = c.toLowerCase();
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    ordered.push(key);
+                }
+            }
+            const extras = Array.from(fromDb)
+                .filter((k) => !seen.has(k))
+                .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+            for (const k of extras) {
+                seen.add(k);
+                ordered.push(k);
+            }
+            const opts = ['<option value="">All categories</option>'].concat(
+                ordered.map(
+                    (key) =>
+                        `<option value="${escapeHtmlAttr(key)}">${escapeHtmlAttr(categoryFilterOptionLabel(key))}</option>`
+                )
+            );
+            sel.innerHTML = opts.join('');
+            if (prevLower && ordered.some((x) => x === prevLower)) sel.value = prevLower;
+        }
+
+        function clearCatalogFiltersUI() {
+            const cat = document.getElementById('filterCategory');
+            const dur = document.getElementById('filterDuration');
+            const eng = document.getElementById('filterEngagement');
+            const vi = document.getElementById('filterViews');
+            if (cat) cat.value = '';
+            if (dur) dur.value = 'any';
+            if (eng) eng.value = 'all';
+            if (vi) vi.value = 'any';
+        }
+
+        /** Fisher–Yates shuffle in place. */
+        function shuffleInPlace(arr) {
+            for (let i = arr.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+            return arr;
+        }
+
+        /** Re-render grid (and modal order) with a random permutation of the current list. */
+        function randomizeLibraryOrder() {
+            const q = document.getElementById('searchInput').value.trim();
+            const source = q ? displayedVideos.slice() : catalogVideosForGrid().slice();
+            if (source.length === 0) return;
+            shuffleInPlace(source);
+            renderVideos(source);
+        }
+
+        function videoCardHTML(video, cardIndex) {
+            const v = video.videos || {};
+            const isAdmin = currentUser && ADMIN_EMAILS.includes(currentUser.email);
+            const kw = escapeHtmlAttr(videoCardTitle(v));
+            const thumb = gridThumbnailUrl(video.mux_thumbnail_url);
+            const gifSrc = gridGifPreviewUrl(video.mux_playback_id);
+            const fetchPri =
+                typeof cardIndex === 'number' && cardIndex < 8 ? 'fetchpriority="high" ' : 'fetchpriority="low" ';
+            const durLabel = escapeHtmlAttr(formatCardDuration(video.duration_seconds));
+            const viewsLabel = escapeHtmlAttr(formatCardViews(v.tiktok_view_count));
+            const engPct = engagementPercentFromVideoRow(v);
+            const engLabel = escapeHtmlAttr(formatEngagementPct(engPct));
+            const clockSvg =
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>';
+            const eyeSvg =
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+            const trendSvg =
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>';
+            return `
+                    <div class="video-card" data-id="${video.id}">
+                        <img class="thumbnail" ${fetchPri}src="${thumb}" alt="${kw}" loading="lazy" decoding="async">
+                        <img class="gif-preview" data-src="${gifSrc.replace(/"/g, '&quot;')}" alt="">
+                        ${isAdmin ? `<button class="hide-btn" data-hide-id="${video.id}" title="Hide video">&times;</button>` : ''}
+                        <div class="overlay">
+                            ${v.category ? `<span class="category">${escapeHtmlAttr(v.category)}</span>` : ''}
+                            <div class="keyword">${escapeHtmlAttr((v.short_summary || v.search_keyword || '').trim())}</div>
+                            <div class="video-card-stats">
+                                <span class="stat" title="Duration">${clockSvg}<span>${durLabel}</span></span>
+                                <span class="stat" title="TikTok views">${eyeSvg}<span>${viewsLabel}</span></span>
+                                <span class="stat" title="Engagement: (likes + comments + shares) ÷ views">${trendSvg}<span>${engLabel}</span></span>
+                            </div>
+                        </div>
+                        <div class="play-icon">
+                            <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                        </div>
+                    </div>
+                `;
+        }
+
+        function disconnectCatalogObserver() {
+            if (catalogObserver) {
+                catalogObserver.disconnect();
+                catalogObserver = null;
+            }
+        }
+
+        function setupCatalogObserver() {
+            disconnectCatalogObserver();
+            const sentinel = document.getElementById('catalogSentinel');
+            if (!sentinel || !hasMoreCatalog) return;
+
+            catalogObserver = new IntersectionObserver(
+                (entries) => {
+                    if (!entries[0].isIntersecting || !hasMoreCatalog || catalogLoading) return;
+                    const q = document.getElementById('searchInput').value.trim();
+                    if (q) return;
+                    loadNextCatalogPage();
+                },
+                { root: null, rootMargin: '480px', threshold: 0 }
+            );
+            catalogObserver.observe(sentinel);
+        }
+
+        async function loadNextCatalogPage() {
+            if (!hasMoreCatalog || catalogLoading) return;
+            catalogLoading = true;
+            try {
+                const from = allVideos.length;
+                const { data, error } = await videoListQuery().range(from, from + VIDEO_PAGE_SIZE - 1);
+                if (error) throw error;
+                const rows = data || [];
+                if (rows.length === 0) {
+                    hasMoreCatalog = false;
+                    document.getElementById('catalogSentinel')?.remove();
+                    disconnectCatalogObserver();
+                    updateStatsAfterCatalogChange();
+                    return;
+                }
+                const cardIndexStart = allVideos.length;
+                allVideos.push(...rows);
+                hasMoreCatalog = rows.length === VIDEO_PAGE_SIZE;
+                rebuildCategoryFilterOptions();
+
+                const qCatalog = document.getElementById('searchInput').value.trim();
+                if (!qCatalog && !catalogFiltersAreDefault()) {
+                    renderVideos(applyCatalogFilters(allVideos));
+                    if (!hasMoreCatalog) {
+                        document.getElementById('catalogSentinel')?.remove();
+                        disconnectCatalogObserver();
+                    }
+                    return;
+                }
+
+                const grid = document.getElementById('videoGrid');
+                const sentinel = document.getElementById('catalogSentinel');
+                const html = rows
+                    .map((video, i) => videoCardHTML(video, cardIndexStart + i))
+                    .join('');
+                if (sentinel) {
+                    sentinel.insertAdjacentHTML('beforebegin', html);
+                } else {
+                    grid.insertAdjacentHTML('beforeend', html);
+                }
+                const isAdminUser = currentUser && ADMIN_EMAILS.includes(currentUser.email);
+                const allCards = grid.querySelectorAll('.video-card');
+                const cardStart = Math.max(0, allCards.length - rows.length);
+                for (let i = cardStart; i < allCards.length; i++) {
+                    const card = allCards[i];
+                    bindVideoCard(card);
+                    if (isAdminUser) {
+                        const hideBtn = card.querySelector('.hide-btn');
+                        if (hideBtn && hideBtn.dataset.wired !== '1') {
+                            hideBtn.dataset.wired = '1';
+                            hideBtn.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                hideVideoById(hideBtn.dataset.hideId);
+                            });
+                        }
+                    }
+                }
+
+                if (!hasMoreCatalog) {
+                    document.getElementById('catalogSentinel')?.remove();
+                    disconnectCatalogObserver();
+                }
+                displayedVideos = allVideos;
+                updateStatsAfterCatalogChange();
+            } catch (e) {
+                console.error('loadNextCatalogPage:', e);
+                hasMoreCatalog = false;
+                document.getElementById('catalogSentinel')?.remove();
+                disconnectCatalogObserver();
+                updateStatsAfterCatalogChange();
+            } finally {
+                catalogLoading = false;
+            }
+        }
+
+        function updateStatsAfterCatalogChange() {
+            const stats = document.getElementById('stats');
+            const q = document.getElementById('searchInput').value.trim();
+            if (q) return;
+            const loaded = allVideos.length;
+            const shown = applyCatalogFilters(allVideos).length;
+            let t;
+            if (catalogFiltersAreDefault()) {
+                t = `${loaded} video${loaded !== 1 ? 's' : ''}`;
+            } else {
+                t = `${shown} showing — ${activeFiltersSummary()} · ${loaded} loaded`;
+            }
+            if (hasMoreCatalog) t += ' · Scroll to load more';
+            stats.textContent = t;
+        }
 
         // --- Auth ---
 
@@ -754,7 +1566,9 @@
             updateDownloadArea();
 
             if (allVideos.length > 0) {
-                renderVideos(displayedVideos.length > 0 ? displayedVideos : allVideos);
+                const q = document.getElementById('searchInput').value.trim();
+                if (q) filterVideos(q);
+                else renderVideos(catalogVideosForGrid());
             }
         }
 
@@ -897,46 +1711,46 @@
         // --- Videos ---
 
         async function loadVideos() {
+            disconnectCatalogObserver();
+            hasMoreCatalog = false;
+            catalogLoading = true;
+            const grid = document.getElementById('videoGrid');
+            grid.innerHTML = `
+                <div class="loading" style="grid-column: 1 / -1;">
+                    <div class="loading-spinner"></div>
+                    <p>Loading videos...</p>
+                </div>
+            `;
             try {
-                const { data, error } = await db
-                    .from('logod_videos')
-                    .select(`
-                        id,
-                        mux_playback_id,
-                        mux_thumbnail_url,
-                        mux_playback_url,
-                        mux_gif_url,
-                        status,
-                        video_id,
-                        videos (
-                            tiktok_description,
-                            tiktok_hashtags,
-                            search_keyword,
-                            category,
-                            video_summary
-                        )
-                    `)
-                    .not('mux_playback_id', 'is', null)
-                    .neq('is_hidden', true)
-                    .order('created_at', { ascending: false });
-
+                const { data, error } = await withTimeout(
+                    videoListQuery().range(0, VIDEO_PAGE_SIZE - 1),
+                    60000,
+                    'Loading videos'
+                );
                 if (error) {
                     console.error('Supabase error:', error);
                     throw error;
                 }
 
-                console.log('Loaded videos:', data?.length, data?.[0]);
-
                 allVideos = data || [];
-                renderVideos(allVideos);
+                hasMoreCatalog = allVideos.length === VIDEO_PAGE_SIZE;
+                console.log('Loaded first page:', allVideos.length, 'hasMore:', hasMoreCatalog);
+
+                rebuildCategoryFilterOptions();
+                renderVideos(catalogVideosForGrid());
             } catch (err) {
                 console.error('loadVideos failed:', err);
-                document.getElementById('videoGrid').innerHTML = `
+                allVideos = [];
+                hasMoreCatalog = false;
+                disconnectCatalogObserver();
+                grid.innerHTML = `
                     <div class="empty-state" style="grid-column: 1 / -1;">
                         <p>Error loading videos: ${err.message}</p>
                         <p style="font-size: 0.8rem; margin-top: 10px;">${err.hint || ''}</p>
                     </div>
                 `;
+            } finally {
+                catalogLoading = false;
             }
         }
 
@@ -944,10 +1758,38 @@
             displayedVideos = videos;
             const grid = document.getElementById('videoGrid');
             const stats = document.getElementById('stats');
+            const q = document.getElementById('searchInput').value.trim();
 
-            stats.textContent = `${videos.length} video${videos.length !== 1 ? 's' : ''} found`;
+            if (q) {
+                let t = `${videos.length} video${videos.length !== 1 ? 's' : ''} found`;
+                if (!catalogFiltersAreDefault()) {
+                    const sum = activeFiltersSummary();
+                    if (sum) t += ` · ${sum}`;
+                }
+                stats.textContent = t;
+            } else {
+                const loaded = allVideos.length;
+                const shown = videos.length;
+                let t;
+                if (catalogFiltersAreDefault()) {
+                    t = `${shown} video${shown !== 1 ? 's' : ''}`;
+                } else {
+                    t = `${shown} showing — ${activeFiltersSummary()} · ${loaded} loaded`;
+                }
+                if (hasMoreCatalog) t += ' · Scroll down to load more';
+                stats.textContent = t;
+            }
 
             if (videos.length === 0) {
+                disconnectCatalogObserver();
+                const cutHint =
+                    !q && !catalogFiltersAreDefault() && hasMoreCatalog
+                        ? '<p style="font-size:0.85rem;margin-top:12px;color:#888;max-width:360px;margin-left:auto;margin-right:auto;">No videos match these filters among what is loaded so far—scroll to load more from the library.</p>'
+                        : '';
+                const sentinelHtml =
+                    !q && hasMoreCatalog
+                        ? '<div id="catalogSentinel" class="catalog-sentinel" aria-hidden="true"></div>'
+                        : '';
                 grid.innerHTML = `
                     <div class="empty-state" style="grid-column: 1 / -1;">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -961,71 +1803,108 @@
                             <line x1="17" y1="7" x2="22" y2="7"></line>
                         </svg>
                         <p>No videos found</p>
+                        ${cutHint}
                     </div>
+                    ${sentinelHtml}
                 `;
+                if (!q && hasMoreCatalog) setupCatalogObserver();
                 return;
             }
 
+            disconnectCatalogObserver();
+            const showSentinel = !q && hasMoreCatalog;
+            grid.innerHTML =
+                videos.map((video, i) => videoCardHTML(video, i)).join('') +
+                (showSentinel ? '<div id="catalogSentinel" class="catalog-sentinel" aria-hidden="true"></div>' : '');
+
+            grid.querySelectorAll('.video-card').forEach((card) => bindVideoCard(card));
+
             const isAdmin = currentUser && ADMIN_EMAILS.includes(currentUser.email);
-
-            grid.innerHTML = videos.map(video => {
-                const v = video.videos || {};
-                return `
-                    <div class="video-card" data-id="${video.id}">
-                        <img class="thumbnail" src="${video.mux_thumbnail_url}" alt="${v.search_keyword || 'Video'}" loading="lazy">
-                        <img class="gif-preview" data-src="${video.mux_gif_url}" alt="">
-                        ${isAdmin ? `<button class="hide-btn" data-hide-id="${video.id}" title="Hide video">&times;</button>` : ''}
-                        <div class="overlay">
-                            ${v.category ? `<span class="category">${v.category}</span>` : ''}
-                            <div class="keyword">${v.search_keyword || ''}</div>
-                        </div>
-                        <div class="play-icon">
-                            <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-
-            grid.querySelectorAll('.video-card').forEach(card => {
-                card.addEventListener('click', (e) => {
-                    if (e.target.closest('.hide-btn')) return;
-                    openModal(card.dataset.id);
-                });
-                card.addEventListener('mouseenter', () => {
-                    const gif = card.querySelector('.gif-preview');
-                    if (gif && !gif.src) {
-                        gif.src = gif.dataset.src;
-                    }
-                });
-            });
-
             if (isAdmin) {
-                grid.querySelectorAll('.hide-btn').forEach(btn => {
+                grid.querySelectorAll('.hide-btn').forEach((btn) => {
+                    btn.dataset.wired = '1';
                     btn.addEventListener('click', (e) => {
                         e.stopPropagation();
                         hideVideoById(btn.dataset.hideId);
                     });
                 });
             }
+
+            setupCatalogObserver();
         }
 
         let searchAbortController = null;
+        let searchRequestId = 0;
 
-        function filterVideosLocal(query) {
-            const q = query.toLowerCase();
-            return allVideos.filter(video => {
-                const v = video.videos || {};
-                const description = (v.tiktok_description || '').toLowerCase();
-                const keyword = (v.search_keyword || '').toLowerCase();
-                const category = (v.category || '').toLowerCase();
-                const hashtags = (v.tiktok_hashtags || []).join(' ').toLowerCase();
-                const summary = (v.video_summary || '').toLowerCase();
-                return description.includes(q) ||
-                       keyword.includes(q) ||
-                       category.includes(q) ||
-                       hashtags.includes(q) ||
-                       summary.includes(q);
-            });
+        /** SQL ILIKE pattern: wrap term in % and escape LIKE wildcards. */
+        function sqlIlikePattern(term) {
+            const t = String(term).trim().slice(0, 200);
+            const escaped = t.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+            return '%' + escaped + '%';
+        }
+
+        /**
+         * Full-library substring search (Postgres ILIKE on joined `videos`).
+         * PostgREST rejects `.or(...)` with embedded `videos.col` paths (PGRST100), so we run
+         * separate ilike filters and merge (same pattern as multiple REST params).
+         */
+        async function fullLibraryTextSearch(query) {
+            const term = String(query).trim().slice(0, 200);
+            if (!term) return [];
+            const pattern = sqlIlikePattern(term);
+            const selectInner = VIDEO_LIST_SELECT.replace('videos (', 'videos!inner (');
+            const base = () =>
+                videoListQueryBase(selectInner).order('created_at', { ascending: false }).limit(500);
+
+            async function runIlike(column) {
+                try {
+                    const { data, error } = await withTimeout(
+                        base().ilike(column, pattern),
+                        60000,
+                        'Text search'
+                    );
+                    if (error) throw error;
+                    return data || [];
+                } catch (e) {
+                    console.warn(`fullLibraryTextSearch ${column}:`, e);
+                    return [];
+                }
+            }
+
+            const lists = await Promise.all([
+                runIlike('videos.search_keyword'),
+                runIlike('videos.category'),
+                runIlike('videos.tiktok_description'),
+                runIlike('videos.video_summary'),
+                runIlike('videos.short_summary'),
+            ]);
+
+            const seen = new Set();
+            const out = [];
+            for (const list of lists) {
+                for (const row of list) {
+                    if (!row?.id || seen.has(row.id)) continue;
+                    seen.add(row.id);
+                    out.push(row);
+                }
+            }
+            return out;
+        }
+
+        function mergeVectorAndTextResults(vectorRows, textRows) {
+            const seen = new Set();
+            const out = [];
+            for (const row of vectorRows) {
+                if (!row?.id || seen.has(row.id)) continue;
+                seen.add(row.id);
+                out.push(row);
+            }
+            for (const row of textRows) {
+                if (!row?.id || seen.has(row.id)) continue;
+                seen.add(row.id);
+                out.push(row);
+            }
+            return out;
         }
 
         async function vectorSearch(query) {
@@ -1040,7 +1919,7 @@
                         'apikey': SUPABASE_ANON_KEY,
                         'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
                     },
-                    body: JSON.stringify({ query }),
+                    body: JSON.stringify({ query, match_count: 200 }),
                     signal: searchAbortController.signal,
                 });
 
@@ -1057,18 +1936,24 @@
                     mux_gif_url: r.mux_gif_url,
                     status: r.status,
                     video_id: r.video_id,
+                    duration_seconds: r.duration_seconds,
                     similarity: r.similarity,
                     videos: {
                         tiktok_description: r.tiktok_description,
                         tiktok_hashtags: r.tiktok_hashtags,
                         search_keyword: r.search_keyword,
+                        short_summary: r.short_summary,
                         category: r.category,
                         video_summary: r.video_summary,
+                        tiktok_view_count: r.tiktok_view_count,
+                        tiktok_like_count: r.tiktok_like_count,
+                        tiktok_comment_count: r.tiktok_comment_count,
+                        tiktok_share_count: r.tiktok_share_count,
                     },
                 }));
             } catch (e) {
                 if (e.name === 'AbortError') return null;
-                console.warn('Vector search failed, falling back to local filter:', e);
+                console.warn('Vector search failed:', e);
                 return null;
             }
         }
@@ -1076,21 +1961,35 @@
         let searchTimeout = null;
 
         function filterVideos(query) {
-            if (!query.trim()) {
-                renderVideos(allVideos);
+            const trimmed = query.trim();
+            if (!trimmed) {
+                if (searchAbortController) {
+                    searchAbortController.abort();
+                    searchAbortController = null;
+                }
+                clearTimeout(searchTimeout);
+                searchRequestId++;
+                renderVideos(catalogVideosForGrid());
                 return;
             }
 
-            // Instant local filter for responsiveness
-            renderVideos(filterVideosLocal(query));
+            searchRequestId++;
+            const myGen = searchRequestId;
+            document.getElementById('stats').textContent = 'Searching library…';
 
-            // Debounced vector search for semantic results
             clearTimeout(searchTimeout);
             searchTimeout = setTimeout(async () => {
-                const results = await vectorSearch(query);
-                if (results && results.length > 0) {
-                    renderVideos(results);
-                }
+                if (myGen !== searchRequestId) return;
+                const [vec, textRows] = await Promise.all([
+                    vectorSearch(trimmed),
+                    fullLibraryTextSearch(trimmed),
+                ]);
+                if (myGen !== searchRequestId) return;
+
+                const vecArr = Array.isArray(vec) ? vec : [];
+                const textArr = Array.isArray(textRows) ? textRows : [];
+                const merged = mergeVectorAndTextResults(vecArr, textArr);
+                renderVideos(applyCatalogFilters(merged));
             }, 400);
         }
 
@@ -1108,9 +2007,112 @@
 
             const videoEl = document.getElementById('modalVideo');
             videoEl.pause();
-            videoEl.src = '';
+            destroyModalHls();
+            videoEl.removeAttribute('src');
+            videoEl.removeAttribute('poster');
+            videoEl.load();
 
             openModal(displayedVideos[nextIdx].id);
+        }
+
+        /** Poster so the modal never shows a blank rectangle while the stream buffers. */
+        function modalPosterUrl(playbackId) {
+            if (!playbackId) return '';
+            return `https://image.mux.com/${encodeURIComponent(playbackId)}/thumbnail.jpg?time=1&width=720&height=1280&fit_mode=smartcrop`;
+        }
+
+        /**
+         * Prefer Mux static low.mp4 (progressive) for fast first frames; fall back to HLS if MP4 errors,
+         * stalls (no media in ~3s), or never becomes playable — avoids 10s+ waits on a stuck MP4 download.
+         */
+        function attachModalPlayback(video) {
+            const videoEl = document.getElementById('modalVideo');
+            const pid = video.mux_playback_id;
+            const playbackUrl = video.mux_playback_url;
+
+            videoEl.poster = modalPosterUrl(pid);
+            videoEl.preload = 'auto';
+
+            destroyModalHls();
+            videoEl.pause();
+            videoEl.removeAttribute('src');
+            videoEl.load();
+
+            let playRequested = false;
+            const tryPlayOnce = () => {
+                if (playRequested) return;
+                playRequested = true;
+                videoEl.play().catch(() => {});
+            };
+
+            const attachHls = () => {
+                videoEl.pause();
+                videoEl.removeAttribute('src');
+                videoEl.load();
+                playRequested = false;
+
+                if (Hls.isSupported()) {
+                    modalHls = new Hls({
+                        capLevelToPlayerSize: true,
+                        startLevel: 0,
+                        maxBufferLength: 12,
+                        maxMaxBufferLength: 32,
+                        testBandwidth: false,
+                        manifestLoadingTimeOut: 8000,
+                        levelLoadingTimeOut: 8000,
+                        fragLoadingTimeOut: 20000,
+                    });
+                    modalHls.loadSource(playbackUrl);
+                    modalHls.attachMedia(videoEl);
+                    modalHls.on(Hls.Events.MANIFEST_PARSED, () => {
+                        tryPlayOnce();
+                    });
+                    videoEl.addEventListener('canplay', () => tryPlayOnce(), { once: true });
+                } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+                    videoEl.src = playbackUrl;
+                    videoEl.addEventListener('canplay', () => tryPlayOnce(), { once: true });
+                    videoEl.addEventListener('loadeddata', () => tryPlayOnce(), { once: true });
+                }
+            };
+
+            const MP4_STALL_MS = 2800;
+            let mp4Settled = false;
+            let mp4SlowTimer = null;
+
+            const mp4Cleanup = () => {
+                if (mp4SlowTimer) {
+                    clearTimeout(mp4SlowTimer);
+                    mp4SlowTimer = null;
+                }
+                videoEl.removeEventListener('loadeddata', onMp4Media);
+                videoEl.removeEventListener('canplay', onMp4Media);
+                videoEl.removeEventListener('error', onMp4Error);
+            };
+
+            const goHlsFromMp4 = () => {
+                if (mp4Settled) return;
+                mp4Settled = true;
+                mp4Cleanup();
+                attachHls();
+            };
+
+            const onMp4Media = () => {
+                if (mp4Settled) return;
+                mp4Settled = true;
+                mp4Cleanup();
+                tryPlayOnce();
+            };
+
+            const onMp4Error = () => {
+                goHlsFromMp4();
+            };
+
+            const mp4Url = `https://stream.mux.com/${encodeURIComponent(pid)}/low.mp4`;
+            videoEl.src = mp4Url;
+            videoEl.addEventListener('loadeddata', onMp4Media);
+            videoEl.addEventListener('canplay', onMp4Media);
+            videoEl.addEventListener('error', onMp4Error);
+            mp4SlowTimer = setTimeout(goHlsFromMp4, MP4_STALL_MS);
         }
 
         function openModal(videoId) {
@@ -1119,47 +2121,27 @@
             if (!video) return;
 
             currentVideo = video;
-            const v = video.videos || {};
-
-            document.getElementById('modalKeyword').textContent = v.search_keyword || 'Video';
-            document.getElementById('modalDescription').textContent = v.tiktok_description || 'No description';
-
-            const hashtagsEl = document.getElementById('modalHashtags');
-            const hashtags = v.tiktok_hashtags || [];
-            hashtagsEl.innerHTML = hashtags.map(tag => `<span class="hashtag">#${tag}</span>`).join('');
-
-            const summaryEl = document.getElementById('modalSummary');
-            summaryEl.textContent = v.video_summary || '';
-            summaryEl.style.display = v.video_summary ? '' : 'none';
+            applyModalTextFromVideo(video);
+            void enrichLogodVideoRow(video);
 
             updateDownloadArea();
 
-            const videoEl = document.getElementById('modalVideo');
-            const playbackUrl = video.mux_playback_url;
-
-            if (Hls.isSupported()) {
-                const hls = new Hls();
-                hls.loadSource(playbackUrl);
-                hls.attachMedia(videoEl);
-                hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    videoEl.play();
-                });
-            } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-                videoEl.src = playbackUrl;
-                videoEl.addEventListener('loadedmetadata', () => {
-                    videoEl.play();
-                });
-            }
-
             document.getElementById('modal').classList.add('active');
             document.body.style.overflow = 'hidden';
+
+            attachModalPlayback(video);
+
             updateModalNav();
         }
 
         function closeModal() {
             const videoEl = document.getElementById('modalVideo');
             videoEl.pause();
-            videoEl.src = '';
+            destroyModalHls();
+            videoEl.removeAttribute('src');
+            videoEl.removeAttribute('poster');
+            videoEl.preload = 'metadata';
+            videoEl.load();
             document.getElementById('modal').classList.remove('active');
             document.body.style.overflow = '';
             currentVideo = null;
@@ -1184,20 +2166,26 @@
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `${currentVideo.videos?.search_keyword || 'video'}_${currentVideo.id.slice(0, 8)}.mp4`;
+                a.download = `${videoCardTitle(currentVideo.videos) || 'video'}_${currentVideo.id.slice(0, 8)}.mp4`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
 
-                await db
-                    .from('logod_videos')
-                    .update({ downloaded_at: new Date().toISOString() })
-                    .eq('id', currentVideo.id);
-
-                allVideos = allVideos.filter(v => v.id !== currentVideo.id);
-                filterVideos(document.getElementById('searchInput').value);
-                closeModal();
+                const { error: logError } = await db.from('logod_video_downloads').insert({
+                    logod_video_id: currentVideo.id,
+                    user_id: currentUser.id,
+                });
+                if (logError) {
+                    console.error('Download log error:', logError);
+                } else {
+                    const next = (Number(currentVideo.download_count) || 0) + 1;
+                    currentVideo.download_count = next;
+                    const bump = (v) => (v.id === currentVideo.id ? { ...v, download_count: next } : v);
+                    allVideos = allVideos.map(bump);
+                    displayedVideos = displayedVideos.map(bump);
+                    syncModalDownloadCount();
+                }
             } catch (error) {
                 console.error('Download error:', error);
                 alert('Download failed. Please try again.');
@@ -1261,6 +2249,26 @@
             filterVideos(e.target.value);
         });
 
+        ['filterCategory', 'filterDuration', 'filterEngagement', 'filterViews'].forEach((id) => {
+            document.getElementById(id).addEventListener('change', () => {
+                const q = document.getElementById('searchInput').value.trim();
+                if (!q) renderVideos(catalogVideosForGrid());
+                else filterVideos(q);
+            });
+        });
+
+        document.getElementById('filtersResetBtn').addEventListener('click', () => {
+            clearCatalogFiltersUI();
+            rebuildCategoryFilterOptions();
+            const q = document.getElementById('searchInput').value.trim();
+            if (!q) renderVideos(catalogVideosForGrid());
+            else filterVideos(q);
+        });
+
+        document.getElementById('shuffleCatalogBtn').addEventListener('click', () => {
+            randomizeLibraryOrder();
+        });
+
         document.getElementById('modalClose').addEventListener('click', closeModal);
         document.getElementById('modalPrev').addEventListener('click', () => navigateModal(-1));
         document.getElementById('modalNext').addEventListener('click', () => navigateModal(1));
@@ -1287,10 +2295,12 @@
         // --- Init ---
 
         async function init() {
-            await initAuth();
+            // Do not await auth: getSession() can hang when storage is blocked/slow, which would
+            // leave the grid stuck on "Loading videos..." forever. Videos load independently.
+            void initAuth().catch((e) => console.error('initAuth:', e));
             await loadVideos();
         }
-        init();
+        init().catch((e) => console.error('init:', e));
     </script>
 </body>
 </html>

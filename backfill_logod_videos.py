@@ -15,12 +15,18 @@ Optional: `--workers=N` (default: a few threads, capped at 8; raise/lower if Gem
 """
 
 import base64
+import errno
 import json
 import os
 import subprocess
 import tempfile
 import threading
+import time
+
 import requests
+from requests import exceptions as req_exc
+from requests.adapters import HTTPAdapter
+from urllib3.exceptions import MaxRetryError, ProtocolError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -36,8 +42,30 @@ MUX_TOKEN_SECRET = os.getenv("MUX_TOKEN_SECRET")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SERVICE_ROLE_SECRET")
 
+
+def coerce_legacy_tiktok_duration_seconds(value) -> float | None:
+    """Older DB rows stored TikTok API milliseconds in ``duration_seconds``."""
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v > 3600:
+        return v / 1000.0
+    return v
+
+
 TIKTOK_MAX_QUALITY_HOST = "tiktok-max-quality.p.rapidapi.com"
 TIKTOK_MAX_QUALITY_URL = f"https://{TIKTOK_MAX_QUALITY_HOST}/download"
+
+# Large MP4 pulls from Mux / TikTok CDNs often exceed short read timeouts between chunks.
+DOWNLOAD_CONNECT_TIMEOUT_S = 60
+DOWNLOAD_READ_TIMEOUT_S = 1800
+DOWNLOAD_MAX_ATTEMPTS = 8
+RAPIDAPI_TIMEOUT_S = 90
+RAPIDAPI_MAX_ATTEMPTS = 6
+MUX_MP4_HEAD_TIMEOUT_S = (15, 90)
 
 # Watermark settings
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "j cam logo black.png")
@@ -52,7 +80,8 @@ WATERMARK_FONT_PATH = "/System/Library/Fonts/Supplemental/Arial Black.ttf"
 def default_backfill_workers() -> int:
     """Parallel workers for download / Gemini / ffmpeg / Mux (bounded to limit API pressure)."""
     n = os.cpu_count() or 4
-    return min(8, max(3, n))
+    # Many concurrent TLS uploads to Mux direct-upload hosts increase SSLEOF risk; cap below CPU.
+    return min(6, max(3, n))
 
 
 print_lock = threading.Lock()
@@ -65,9 +94,62 @@ def get_supabase() -> Client:
     return _thread_local.supabase
 
 
+def _cdn_session() -> requests.Session:
+    """Thread-local session for Mux stream / TikTok CDN (reuse TLS, bounded pool per thread)."""
+    s = getattr(_thread_local, "cdn_session", None)
+    if s is None:
+        s = requests.Session()
+        s.headers.update({"User-Agent": "jcam-backfill/1.0"})
+        adapter = HTTPAdapter(pool_connections=8, pool_maxsize=8, max_retries=0)
+        s.mount("https://", adapter)
+        _thread_local.cdn_session = s
+    return s
+
+
 def thread_print(*args, **kwargs):
     with print_lock:
         print(*args, **kwargs)
+
+
+def _transient_download_error(exc: BaseException) -> bool:
+    if isinstance(exc, (req_exc.Timeout, req_exc.ConnectionError, req_exc.ChunkedEncodingError)):
+        return True
+    if isinstance(exc, req_exc.HTTPError):
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+        if code in (408, 425, 429, 500, 502, 503, 504):
+            return True
+    if isinstance(exc, req_exc.SSLError):
+        return True
+    if isinstance(exc, MaxRetryError):
+        reason = getattr(exc, "reason", None)
+        if reason is not None and reason is not exc and _transient_download_error(reason):
+            return True
+    if isinstance(exc, ProtocolError):
+        return True
+    if isinstance(exc, OSError):
+        en = getattr(exc, "errno", None)
+        if en in (errno.EPIPE, errno.ECONNRESET, errno.ETIMEDOUT, errno.ECONNABORTED):
+            return True
+    msg = str(exc).lower()
+    if any(
+        x in msg
+        for x in (
+            "timed out",
+            "connection reset",
+            "broken pipe",
+            "temporarily unavailable",
+            "eof occurred",
+            "ssl",
+            "decryption failed",
+            "wrong version number",
+            "max retries exceeded",
+        )
+    ):
+        return True
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None and cause is not exc:
+        return _transient_download_error(cause)
+    return False
 
 
 def get_videos_without_logod() -> list[dict]:
@@ -165,58 +247,102 @@ def get_max_quality_url(video_id: str, author_username: str) -> str | None:
     }
     tiktok_url = f"https://www.tiktok.com/@{author_username}/video/{video_id}"
 
-    try:
-        response = requests.get(TIKTOK_MAX_QUALITY_URL, headers=headers, params={"url": tiktok_url})
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("status") == "success":
-            for url_key in ["off_url", "download_url"]:
-                url = data.get(url_key)
-                if url and "token=" in url:
-                    try:
-                        token = url.split("token=")[1]
-                        payload = token.split(".")[1]
-                        payload += "=" * (4 - len(payload) % 4)
-                        decoded = json.loads(base64.urlsafe_b64decode(payload))
-                        direct_url = decoded.get("url")
-                        if direct_url:
-                            return direct_url
-                    except Exception:
-                        continue
-                elif url:
-                    return url
-            thread_print(f"   [{video_id}] TikTok API: success but no usable URL in response")
-        else:
-            status = data.get("status", "unknown")
-            msg = data.get("message", "")
-            thread_print(f"   [{video_id}] TikTok API: status={status} message={msg}")
-    except requests.RequestException as e:
-        thread_print(f"   [{video_id}] TikTok API request error: {e}")
-    
+    last_exc = None
+    for attempt in range(RAPIDAPI_MAX_ATTEMPTS):
+        try:
+            response = _cdn_session().get(
+                TIKTOK_MAX_QUALITY_URL,
+                headers=headers,
+                params={"url": tiktok_url},
+                timeout=RAPIDAPI_TIMEOUT_S,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("status") == "success":
+                for url_key in ["off_url", "download_url"]:
+                    url = data.get(url_key)
+                    if url and "token=" in url:
+                        try:
+                            token = url.split("token=")[1]
+                            payload = token.split(".")[1]
+                            payload += "=" * (4 - len(payload) % 4)
+                            decoded = json.loads(base64.urlsafe_b64decode(payload))
+                            direct_url = decoded.get("url")
+                            if direct_url:
+                                return direct_url
+                        except Exception:
+                            continue
+                    elif url:
+                        return url
+                thread_print(f"   [{video_id}] TikTok API: success but no usable URL in response")
+            else:
+                status = data.get("status", "unknown")
+                msg = data.get("message", "")
+                thread_print(f"   [{video_id}] TikTok API: status={status} message={msg}")
+            return None
+        except requests.RequestException as e:
+            last_exc = e
+            if attempt < RAPIDAPI_MAX_ATTEMPTS - 1 and _transient_download_error(e):
+                thread_print(
+                    f"   [{video_id}] TikTok API transient error (attempt {attempt + 1}/{RAPIDAPI_MAX_ATTEMPTS}): {str(e)[:120]}"
+                )
+                time.sleep(min(45.0, 1.5**attempt))
+                continue
+            thread_print(f"   [{video_id}] TikTok API request error: {e}")
+
+    if last_exc is not None:
+        thread_print(f"   [{video_id}] TikTok API gave up after {RAPIDAPI_MAX_ATTEMPTS} attempts: {last_exc}")
     return None
 
 
 def download_video(url: str, output_path: str, tiktok_id: str = "") -> tuple[bool, str]:
-    """Download video from URL. Returns (success, error_message)."""
-    try:
-        response = requests.get(url, stream=True, timeout=120)
-        response.raise_for_status()
-        content_type = response.headers.get("Content-Type", "")
-        if "video" not in content_type and "octet-stream" not in content_type:
-            return False, f"Unexpected Content-Type: {content_type} (HTTP {response.status_code})"
-        with open(output_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        file_size = os.path.getsize(output_path)
-        if file_size < 1024:
-            os.remove(output_path)
-            return False, f"File too small ({file_size} bytes), likely not a video"
-        return True, ""
-    except requests.HTTPError as e:
-        return False, f"HTTP {e.response.status_code}: {e.response.reason}"
-    except Exception as e:
-        return False, str(e)
+    """Download video from URL. Retries on read/connect timeouts (Mux / tokcdn)."""
+    timeout = (DOWNLOAD_CONNECT_TIMEOUT_S, DOWNLOAD_READ_TIMEOUT_S)
+    headers = {"User-Agent": "jcam-backfill/1.0"}
+    last_err = ""
+
+    for attempt in range(DOWNLOAD_MAX_ATTEMPTS):
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+        try:
+            response = _cdn_session().get(url, stream=True, timeout=timeout, headers=headers)
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "")
+            if "video" not in content_type and "octet-stream" not in content_type:
+                return False, f"Unexpected Content-Type: {content_type} (HTTP {response.status_code})"
+            with open(output_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+            file_size = os.path.getsize(output_path)
+            if file_size < 1024:
+                os.remove(output_path)
+                return False, f"File too small ({file_size} bytes), likely not a video"
+            return True, ""
+        except requests.HTTPError as e:
+            last_err = f"HTTP {e.response.status_code}: {e.response.reason}"
+            if attempt < DOWNLOAD_MAX_ATTEMPTS - 1 and _transient_download_error(e):
+                thread_print(
+                    f"   [{tiktok_id or 'download'}] transient HTTP (attempt {attempt + 1}/{DOWNLOAD_MAX_ATTEMPTS}): {last_err}"
+                )
+                time.sleep(min(60.0, 2.0**attempt))
+                continue
+            return False, last_err
+        except Exception as e:
+            last_err = str(e)
+            if attempt < DOWNLOAD_MAX_ATTEMPTS - 1 and _transient_download_error(e):
+                thread_print(
+                    f"   [{tiktok_id or 'download'}] transient error (attempt {attempt + 1}/{DOWNLOAD_MAX_ATTEMPTS}): {last_err[:120]}"
+                )
+                time.sleep(min(60.0, 2.0**attempt))
+                continue
+            return False, last_err
+
+    return False, last_err or "download failed"
 
 
 def add_watermark(
@@ -335,12 +461,21 @@ def get_mux_mp4_url(playback_id: str) -> str | None:
     # Mux static renditions: capped-1080p is the usual name when mp4_support is capped-1080p
     for quality in ["capped-1080p", "high", "medium", "low"]:
         url = f"https://stream.mux.com/{playback_id}/{quality}.mp4"
-        try:
-            r = requests.head(url, timeout=10, allow_redirects=True)
-            if r.status_code == 200:
-                return url
-        except requests.RequestException:
-            continue
+        for head_try in range(3):
+            try:
+                r = _cdn_session().head(
+                    url,
+                    timeout=MUX_MP4_HEAD_TIMEOUT_S,
+                    allow_redirects=True,
+                )
+                if r.status_code == 200:
+                    return url
+                break
+            except requests.RequestException as e:
+                if head_try < 2 and _transient_download_error(e):
+                    time.sleep(1.0 + head_try)
+                    continue
+                break
     return None
 
 
@@ -376,7 +511,7 @@ def process_video(
     video_id = video["id"]
     tiktok_id = video["tiktok_video_id"]
     author = video["tiktok_author_username"] or "unknown"
-    duration = video.get("duration_seconds")
+    duration = coerce_legacy_tiktok_duration_seconds(video.get("duration_seconds"))
     playback_id = video.get("mux_playback_id")
     
     result = {"video_id": video_id, "success": False, "error": None}

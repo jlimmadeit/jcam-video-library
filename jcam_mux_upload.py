@@ -5,15 +5,43 @@ from __future__ import annotations
 
 import errno
 import os
+import threading
 import time
 
 import requests
 from requests import exceptions as req_exc
+from requests.adapters import HTTPAdapter
+from urllib3.exceptions import MaxRetryError, ProtocolError
+
+_tls = threading.local()
+
+
+def _mux_session() -> requests.Session:
+    """Thread-local Session (requests sessions are not safe to share across threads)."""
+    s = getattr(_tls, "mux_session", None)
+    if s is None:
+        s = requests.Session()
+        # Wider pool helps many workers talking to api.mux.com + occasional direct-upload hosts.
+        adapter = HTTPAdapter(pool_connections=12, pool_maxsize=12, max_retries=0)
+        s.mount("https://", adapter)
+        _tls.mux_session = s
+    return s
+
 
 def _transient_request_error(exc: BaseException) -> bool:
     if isinstance(exc, (req_exc.Timeout, req_exc.ConnectionError, req_exc.ChunkedEncodingError)):
         return True
+    if isinstance(exc, req_exc.HTTPError):
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+        if code in (408, 425, 429, 500, 502, 503, 504):
+            return True
     if isinstance(exc, req_exc.SSLError):
+        return True
+    if isinstance(exc, MaxRetryError):
+        reason = getattr(exc, "reason", None)
+        if reason is not None and reason is not exc and _transient_request_error(reason):
+            return True
+    if isinstance(exc, ProtocolError):
         return True
     if isinstance(exc, OSError):
         en = getattr(exc, "errno", None)
@@ -29,6 +57,9 @@ def _transient_request_error(exc: BaseException) -> bool:
             "timed out",
             "temporarily unavailable",
             "nodename nor servname",
+            "max retries exceeded",
+            "ssl",
+            "decryption failed",
         )
     ):
         return True
@@ -61,10 +92,11 @@ def upload_to_mux_direct(file_path: str, passthrough: str | None = None) -> dict
     size = os.path.getsize(file_path)
     put_timeout = max(600, min(7200, size // (256 * 1024) + 300))
 
+    session = _mux_session()
     last_exc: BaseException | None = None
-    for outer in range(4):
+    for outer in range(8):
         try:
-            response = requests.post(
+            response = session.post(
                 create_url,
                 json=payload,
                 headers=headers,
@@ -77,16 +109,16 @@ def upload_to_mux_direct(file_path: str, passthrough: str | None = None) -> dict
             upload_id = upload_data["data"]["id"]
         except Exception as e:
             last_exc = e
-            if outer < 3 and _transient_request_error(e):
-                time.sleep(min(30.0, 2.0**outer))
+            if outer < 7 and _transient_request_error(e):
+                time.sleep(min(45.0, 2.0**min(outer, 6)))
                 continue
             raise
 
         put_ok = False
-        for put_try in range(6):
+        for put_try in range(12):
             try:
                 with open(file_path, "rb") as fh:
-                    upload_response = requests.put(
+                    upload_response = session.put(
                         upload_url,
                         data=fh,
                         headers={"Content-Type": "video/mp4"},
@@ -97,24 +129,24 @@ def upload_to_mux_direct(file_path: str, passthrough: str | None = None) -> dict
                 break
             except Exception as e:
                 last_exc = e
-                if put_try < 5 and _transient_request_error(e):
-                    time.sleep(min(60.0, 2.0**put_try))
+                if put_try < 11 and _transient_request_error(e):
+                    time.sleep(min(90.0, 2.0**min(put_try, 6)))
                     continue
                 break
 
         if not put_ok:
-            if outer < 3:
+            if outer < 7:
                 print(
-                    f"Mux direct-upload PUT failed (retry {outer + 1}/3 with new upload URL): {last_exc!r}"
+                    f"Mux direct-upload PUT failed (retry {outer + 1}/8 with new upload URL): {last_exc!r}"
                 )
-                time.sleep(min(30.0, 2.0**outer))
+                time.sleep(min(45.0, 2.0**min(outer, 6)))
                 continue
             assert last_exc is not None
             raise last_exc
 
         for poll in range(30):
             try:
-                check_response = requests.get(
+                check_response = session.get(
                     f"https://api.mux.com/video/v1/uploads/{upload_id}",
                     auth=(mux_token_id, mux_token_secret),
                     timeout=60,
@@ -130,7 +162,7 @@ def upload_to_mux_direct(file_path: str, passthrough: str | None = None) -> dict
 
             if status == "asset_created":
                 asset_id = check_data["data"]["asset_id"]
-                asset_response = requests.get(
+                asset_response = session.get(
                     f"https://api.mux.com/video/v1/assets/{asset_id}",
                     auth=(mux_token_id, mux_token_secret),
                     timeout=60,
