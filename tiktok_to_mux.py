@@ -23,9 +23,10 @@ from dotenv import load_dotenv
 from google import genai
 from supabase import create_client, Client
 
-from banner_placement import compute_banner_y_for_logod_video
-
 load_dotenv()
+
+from banner_placement import compute_banner_y_for_logod_video
+from jcam_mux_upload import upload_to_mux_direct
 
 RAPID_API_KEY = os.getenv("RAPID_API_KEY")
 MUX_TOKEN_ID = os.getenv("MUX_TOKEN_ID")
@@ -331,68 +332,6 @@ def add_watermark(
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.returncode == 0
-
-
-def upload_to_mux_direct(file_path: str, passthrough: str = None) -> dict:
-    """Upload a video file directly to Mux using direct upload."""
-    import time
-    
-    # Step 1: Create a direct upload URL
-    create_url = "https://api.mux.com/video/v1/uploads"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "new_asset_settings": {
-            "playback_policy": ["public"],
-            "mp4_support": "capped-1080p",
-        },
-        "cors_origin": "*",
-    }
-    if passthrough:
-        payload["new_asset_settings"]["passthrough"] = passthrough
-
-    response = requests.post(
-        create_url,
-        json=payload,
-        headers=headers,
-        auth=(MUX_TOKEN_ID, MUX_TOKEN_SECRET),
-    )
-    response.raise_for_status()
-    upload_data = response.json()
-    
-    upload_url = upload_data["data"]["url"]
-    upload_id = upload_data["data"]["id"]
-    
-    # Step 2: Upload the file directly to the upload URL
-    with open(file_path, "rb") as f:
-        upload_response = requests.put(
-            upload_url,
-            data=f,
-            headers={"Content-Type": "video/mp4"},
-        )
-        upload_response.raise_for_status()
-    
-    # Step 3: Poll for the asset to be created
-    for _ in range(30):
-        check_response = requests.get(
-            f"https://api.mux.com/video/v1/uploads/{upload_id}",
-            auth=(MUX_TOKEN_ID, MUX_TOKEN_SECRET),
-        )
-        check_data = check_response.json()
-        status = check_data["data"]["status"]
-        
-        if status == "asset_created":
-            asset_id = check_data["data"]["asset_id"]
-            asset_response = requests.get(
-                f"https://api.mux.com/video/v1/assets/{asset_id}",
-                auth=(MUX_TOKEN_ID, MUX_TOKEN_SECRET),
-            )
-            return asset_response.json()
-        elif status == "errored":
-            raise Exception(f"Upload failed: {check_data['data'].get('error', {}).get('message', 'Unknown error')}")
-        
-        time.sleep(1)
-    
-    return {"data": {"id": check_data["data"].get("asset_id"), "status": "preparing"}}
 
 
 def wait_for_mux_ready(asset_id: str, max_wait: int = 120) -> dict | None:

@@ -8,7 +8,10 @@ Default: videos with no logod row yet — Mux MP4 first, TikTok fallback, then
 Re-backfill: `python backfill_logod_videos.py --rebackfill-all` — every existing
 `logod_videos` row is re-built from source (same download order), placement
 re-run with the current algorithm, new Mux asset, and the same DB row updated.
-Optional: `--workers=N` (default 1 when re-backfilling for Gemini).
+After a partial run, skip rows that already updated:  
+`--rebackfill-all --skip-logod-ids-file=rebackfill_skip_logod_ids.txt`  
+(one logod_videos.id UUID per line; lines starting with `#` ignored).
+Optional: `--workers=N` (default: a few threads, capped at 8; raise/lower if Gemini rate-limits).
 """
 
 import base64
@@ -22,9 +25,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-from banner_placement import compute_banner_y_for_logod_video
-
 load_dotenv()
+
+from banner_placement import compute_banner_y_for_logod_video
+from jcam_mux_upload import upload_to_mux_direct
 
 RAPID_API_KEY = os.getenv("RAPID_API_KEY")
 MUX_TOKEN_ID = os.getenv("MUX_TOKEN_ID")
@@ -43,6 +47,13 @@ WATERMARK_PADDING = 105
 WATERMARK_TARGET_WIDTH = 1080
 WATERMARK_TARGET_HEIGHT = 1920
 WATERMARK_FONT_PATH = "/System/Library/Fonts/Supplemental/Arial Black.ttf"
+
+
+def default_backfill_workers() -> int:
+    """Parallel workers for download / Gemini / ffmpeg / Mux (bounded to limit API pressure)."""
+    n = os.cpu_count() or 4
+    return min(8, max(3, n))
+
 
 print_lock = threading.Lock()
 _thread_local = threading.local()
@@ -95,15 +106,32 @@ def _paginate_logod_video_ids(supabase: Client) -> list[dict]:
     return rows
 
 
-def get_videos_for_logod_rebackfill() -> list[tuple[dict, str]]:
+def load_skip_logod_ids_file(path: str) -> set[str]:
+    """UUIDs of logod_videos rows to skip (e.g. already re-built in a prior run)."""
+    out: set[str] = set()
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                out.add(line)
+    return out
+
+
+def get_videos_for_logod_rebackfill(skip_logod_ids: set[str] | None = None) -> list[tuple[dict, str]]:
     """
     (video row, logod_row_id) for every logod_videos row that still has a parent video.
     Multiple logod rows per video_id are each listed separately.
+    If ``skip_logod_ids`` is set, rows whose ``logod_videos.id`` is in the set are omitted.
     """
     supabase = get_supabase()
     logod_rows = _paginate_logod_video_ids(supabase)
     if not logod_rows:
         return []
+
+    if skip_logod_ids:
+        before = len(logod_rows)
+        logod_rows = [lr for lr in logod_rows if lr["id"] not in skip_logod_ids]
+        print(f"Skipping {before - len(logod_rows)} logod row(s) listed in skip file ({len(logod_rows)} remaining)\n")
 
     video_ids = list({row["video_id"] for row in logod_rows})
     by_vid: dict[str, dict] = {}
@@ -226,65 +254,6 @@ def add_watermark(
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.returncode == 0
-
-
-def upload_to_mux_direct(file_path: str, passthrough: str = None) -> dict:
-    """Upload a video file directly to Mux."""
-    import time
-    
-    create_url = "https://api.mux.com/video/v1/uploads"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "new_asset_settings": {
-            "playback_policy": ["public"],
-            "mp4_support": "capped-1080p",
-        },
-        "cors_origin": "*",
-    }
-    if passthrough:
-        payload["new_asset_settings"]["passthrough"] = passthrough
-
-    response = requests.post(
-        create_url,
-        json=payload,
-        headers=headers,
-        auth=(MUX_TOKEN_ID, MUX_TOKEN_SECRET),
-    )
-    response.raise_for_status()
-    upload_data = response.json()
-    
-    upload_url = upload_data["data"]["url"]
-    upload_id = upload_data["data"]["id"]
-    
-    with open(file_path, "rb") as f:
-        upload_response = requests.put(
-            upload_url,
-            data=f,
-            headers={"Content-Type": "video/mp4"},
-        )
-        upload_response.raise_for_status()
-    
-    for _ in range(30):
-        check_response = requests.get(
-            f"https://api.mux.com/video/v1/uploads/{upload_id}",
-            auth=(MUX_TOKEN_ID, MUX_TOKEN_SECRET),
-        )
-        check_data = check_response.json()
-        status = check_data["data"]["status"]
-        
-        if status == "asset_created":
-            asset_id = check_data["data"]["asset_id"]
-            asset_response = requests.get(
-                f"https://api.mux.com/video/v1/assets/{asset_id}",
-                auth=(MUX_TOKEN_ID, MUX_TOKEN_SECRET),
-            )
-            return asset_response.json()
-        elif status == "errored":
-            raise Exception(f"Upload failed: {check_data['data'].get('error', {}).get('message', 'Unknown error')}")
-        
-        time.sleep(1)
-    
-    return {"data": {"id": check_data["data"].get("asset_id"), "status": "preparing"}}
 
 
 def save_logod_video(
@@ -539,10 +508,19 @@ def process_video(
     return result
 
 
-def main(max_workers: int = 2, rebackfill_all: bool = False):
+def main(
+    max_workers: int | None = None,
+    rebackfill_all: bool = False,
+    skip_logod_ids_file: str | None = None,
+):
     """Process videos without logod, or re-build every existing logod row."""
+    mw = max_workers if max_workers is not None else default_backfill_workers()
     if rebackfill_all:
-        pairs = get_videos_for_logod_rebackfill()
+        skip_ids: set[str] | None = None
+        if skip_logod_ids_file:
+            skip_ids = load_skip_logod_ids_file(skip_logod_ids_file)
+            print(f"Loaded {len(skip_ids)} logod id(s) to skip from {skip_logod_ids_file}\n")
+        pairs = get_videos_for_logod_rebackfill(skip_logod_ids=skip_ids)
         print(f"Re-backfill: {len(pairs)} logod row(s) (Mux → TikTok, new placement, update DB)\n")
         work_list: list[tuple[dict, int, str | None]] = [
             (video, i, logod_id) for i, (video, logod_id) in enumerate(pairs, 1)
@@ -556,10 +534,11 @@ def main(max_workers: int = 2, rebackfill_all: bool = False):
         print("Nothing to process!")
         return
 
+    print(f"Using {mw} worker thread(s)\n")
     total_success = 0
     total_failed = 0
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with ThreadPoolExecutor(max_workers=mw) as executor:
         futures = {
             executor.submit(process_video, video, i, logod_id): video["id"]
             for video, i, logod_id in work_list
@@ -586,8 +565,15 @@ if __name__ == "__main__":
     import sys
 
     rebackfill_all = "--rebackfill-all" in sys.argv
-    max_workers = 1 if rebackfill_all else 2
+    max_workers = default_backfill_workers()
+    skip_logod_ids_file: str | None = None
     for arg in sys.argv:
         if arg.startswith("--workers="):
             max_workers = max(1, int(arg.partition("=")[2]))
-    main(max_workers=max_workers, rebackfill_all=rebackfill_all)
+        elif arg.startswith("--skip-logod-ids-file="):
+            skip_logod_ids_file = arg.partition("=")[2].strip() or None
+    main(
+        max_workers=max_workers,
+        rebackfill_all=rebackfill_all,
+        skip_logod_ids_file=skip_logod_ids_file,
+    )

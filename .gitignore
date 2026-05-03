@@ -7,3 +7,4 @@ __pycache__/
 node_modules/
 .vercel
 supabase/.temp/
+rebackfill_skip_logod_ids.txt
