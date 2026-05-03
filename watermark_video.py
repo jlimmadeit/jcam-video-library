@@ -15,7 +15,7 @@ RAPID_API_KEY = os.getenv("RAPID_API_KEY")
 TIKTOK_MAX_QUALITY_HOST = "tiktok-max-quality.p.rapidapi.com"
 TIKTOK_MAX_QUALITY_URL = f"https://{TIKTOK_MAX_QUALITY_HOST}/download"
 
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "j.cam 400x160.png")
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "j cam logo black.png")
 
 
 def get_video_url(tiktok_url: str) -> str | None:

@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
-Temporary script to create watermarked versions of existing videos in the database.
-Re-downloads from TikTok since Mux MP4s may not be ready and TikTok URLs expire.
+Create or refresh jcam logod (banner) versions in Supabase + Mux.
+
+Default: videos with no logod row yet — Mux MP4 first, TikTok fallback, then
+`banner_placement.compute_banner_y_for_logod_video` + watermark + Mux upload.
+
+Re-backfill: `python backfill_logod_videos.py --rebackfill-all` — every existing
+`logod_videos` row is re-built from source (same download order), placement
+re-run with the current algorithm, new Mux asset, and the same DB row updated.
+Optional: `--workers=N` (default 1 when re-backfilling for Gemini).
 """
 
 import base64
@@ -15,6 +22,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+from banner_placement import compute_banner_y_for_logod_video
+
 load_dotenv()
 
 RAPID_API_KEY = os.getenv("RAPID_API_KEY")
@@ -27,7 +36,7 @@ TIKTOK_MAX_QUALITY_HOST = "tiktok-max-quality.p.rapidapi.com"
 TIKTOK_MAX_QUALITY_URL = f"https://{TIKTOK_MAX_QUALITY_HOST}/download"
 
 # Watermark settings
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "jcam-logo.png")
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "j cam logo black.png")
 WATERMARK_BANNER_HEIGHT = 100
 WATERMARK_BANNER_POSITION = 5 / 7
 WATERMARK_PADDING = 105
@@ -64,6 +73,60 @@ def get_videos_without_logod() -> list[dict]:
     # Filter to only videos without any logod version (hidden or not)
     videos = [v for v in videos_response.data if v["id"] not in logod_video_ids]
     return videos
+
+
+def _paginate_logod_video_ids(supabase: Client) -> list[dict]:
+    """All logod_videos rows (id + video_id), paginated."""
+    rows: list[dict] = []
+    offset = 0
+    page = 500
+    while True:
+        r = (
+            supabase.table("logod_videos")
+            .select("id, video_id")
+            .range(offset, offset + page - 1)
+            .execute()
+        )
+        batch = r.data or []
+        rows.extend(batch)
+        if len(batch) < page:
+            break
+        offset += page
+    return rows
+
+
+def get_videos_for_logod_rebackfill() -> list[tuple[dict, str]]:
+    """
+    (video row, logod_row_id) for every logod_videos row that still has a parent video.
+    Multiple logod rows per video_id are each listed separately.
+    """
+    supabase = get_supabase()
+    logod_rows = _paginate_logod_video_ids(supabase)
+    if not logod_rows:
+        return []
+
+    video_ids = list({row["video_id"] for row in logod_rows})
+    by_vid: dict[str, dict] = {}
+    chunk = 100
+    for i in range(0, len(video_ids), chunk):
+        part = video_ids[i : i + chunk]
+        vr = (
+            supabase.table("videos")
+            .select("id, tiktok_video_id, tiktok_author_username, duration_seconds, mux_playback_id")
+            .in_("id", part)
+            .execute()
+        )
+        for v in vr.data or []:
+            by_vid[v["id"]] = v
+
+    pairs: list[tuple[dict, str]] = []
+    for lr in logod_rows:
+        v = by_vid.get(lr["video_id"])
+        if not v:
+            thread_print(f"[skip] logod id={lr['id']}: missing parent video {lr['video_id']}")
+            continue
+        pairs.append((v, lr["id"]))
+    return pairs
 
 
 def get_max_quality_url(video_id: str, author_username: str) -> str | None:
@@ -128,11 +191,19 @@ def download_video(url: str, output_path: str, tiktok_id: str = "") -> tuple[boo
         return False, str(e)
 
 
-def add_watermark(input_path: str, output_path: str, author_username: str) -> bool:
+def add_watermark(
+    input_path: str,
+    output_path: str,
+    author_username: str,
+    banner_y: int | None = None,
+) -> bool:
     """Add j.cam watermark banner to video."""
-    banner_y = int(WATERMARK_TARGET_HEIGHT * WATERMARK_BANNER_POSITION)
+    if banner_y is None:
+        banner_y = int(WATERMARK_TARGET_HEIGHT * WATERMARK_BANNER_POSITION)
+    max_y = WATERMARK_TARGET_HEIGHT - WATERMARK_BANNER_HEIGHT
+    banner_y = max(0, min(int(banner_y), max_y))
     logo_height = WATERMARK_BANNER_HEIGHT - 20
-    url_text = f"J.CAM/{author_username.upper()}"
+    url_text = f"jcam.app/{author_username.upper()}"
     
     filter_complex = (
         f"[0:v]scale={WATERMARK_TARGET_WIDTH}:{WATERMARK_TARGET_HEIGHT}:force_original_aspect_ratio=decrease,"
@@ -216,12 +287,24 @@ def upload_to_mux_direct(file_path: str, passthrough: str = None) -> dict:
     return {"data": {"id": check_data["data"].get("asset_id"), "status": "preparing"}}
 
 
-def save_logod_video(video_db_id: str, mux_data: dict, duration: float = None, file_size: int = None) -> dict:
+def save_logod_video(
+    video_db_id: str,
+    mux_data: dict,
+    duration: float = None,
+    file_size: int = None,
+    banner_position_fraction: float | None = None,
+) -> dict:
     """Save watermarked video record to Supabase."""
     supabase = get_supabase()
     mux_asset = mux_data.get("data", {})
     playback_ids = mux_asset.get("playback_ids", [])
     playback_id = playback_ids[0]["id"] if playback_ids else None
+
+    bp = (
+        banner_position_fraction
+        if banner_position_fraction is not None
+        else WATERMARK_BANNER_POSITION
+    )
 
     record = {
         "video_id": video_db_id,
@@ -230,7 +313,7 @@ def save_logod_video(video_db_id: str, mux_data: dict, duration: float = None, f
         "mux_status": mux_asset.get("status"),
         "watermark_type": "jcam_banner",
         "banner_height": WATERMARK_BANNER_HEIGHT,
-        "banner_position": round(WATERMARK_BANNER_POSITION, 3),
+        "banner_position": round(bp, 4),
         "logo_padding": WATERMARK_PADDING,
         "width": WATERMARK_TARGET_WIDTH,
         "height": WATERMARK_TARGET_HEIGHT,
@@ -243,14 +326,45 @@ def save_logod_video(video_db_id: str, mux_data: dict, duration: float = None, f
     return response.data[0] if response.data else None
 
 
+def update_logod_video_record(
+    logod_db_id: str,
+    mux_data: dict,
+    duration: float | None,
+    file_size: int | None,
+    banner_position_fraction: float | None,
+) -> None:
+    """Replace Mux asset pointers and metadata on an existing logod_videos row."""
+    supabase = get_supabase()
+    mux_asset = mux_data.get("data", {})
+    playback_ids = mux_asset.get("playback_ids", [])
+    playback_id = playback_ids[0]["id"] if playback_ids else None
+
+    bp = (
+        banner_position_fraction
+        if banner_position_fraction is not None
+        else WATERMARK_BANNER_POSITION
+    )
+
+    update: dict = {
+        "mux_asset_id": mux_asset.get("id"),
+        "mux_playback_id": playback_id,
+        "mux_status": mux_asset.get("status"),
+        "banner_position": round(bp, 4),
+        "duration_seconds": duration,
+        "file_size_bytes": file_size,
+        "status": "processing",
+    }
+    supabase.table("logod_videos").update(update).eq("id", logod_db_id).execute()
+
+
 def get_mux_mp4_url(playback_id: str) -> str | None:
     """Get a working MP4 download URL from Mux.
     Tries the static rendition paths in order of quality.
     """
     if not playback_id:
         return None
-    # Mux static rendition names for mp4_support: "capped-1080p"
-    for quality in ["high", "medium", "low"]:
+    # Mux static renditions: capped-1080p is the usual name when mp4_support is capped-1080p
+    for quality in ["capped-1080p", "high", "medium", "low"]:
         url = f"https://stream.mux.com/{playback_id}/{quality}.mp4"
         try:
             r = requests.head(url, timeout=10, allow_redirects=True)
@@ -279,10 +393,16 @@ def reupload_original_to_mux(file_path: str, video_db_id: str, tiktok_id: str, c
     return playback_id
 
 
-def process_video(video: dict, index: int) -> dict:
+def process_video(
+    video: dict,
+    index: int,
+    existing_logod_id: str | None = None,
+) -> dict:
     """Process a single video: download, watermark, upload to Mux.
     Tries Mux MP4 first. If corrupt/too small, falls back to TikTok
     and re-uploads the original to Mux.
+
+    If ``existing_logod_id`` is set, updates that logod row instead of inserting.
     """
     video_id = video["id"]
     tiktok_id = video["tiktok_video_id"]
@@ -343,9 +463,23 @@ def process_video(video: dict, index: int) -> dict:
             new_playback_id = reupload_original_to_mux(original_path, video_id, tiktok_id)
             thread_print(f"   [{tiktok_id}] New Mux playback ID: {new_playback_id}")
 
-        # Watermark
+        # Watermark (banner Y from Gemini caption boxes on 10 sample frames)
         thread_print(f"   [{tiktok_id}] Watermarking...")
-        if not add_watermark(original_path, watermarked_path, author):
+        banner_y, placement_meta = compute_banner_y_for_logod_video(
+            original_path, log_prefix=tiktok_id
+        )
+        if placement_meta.get("gemini_error"):
+            thread_print(
+                f"   [{tiktok_id}] Banner Gemini: {placement_meta['gemini_error']} (fallback position)"
+            )
+        else:
+            regs = placement_meta.get("regions", [])
+            ncap = sum(1 for r in regs if r.get("role") == "auto_caption")
+            nov = sum(1 for r in regs if r.get("role") == "creator_overlay")
+            thread_print(
+                f"   [{tiktok_id}] Banner placement: y={banner_y} (auto_caption={ncap}, creator_overlay={nov}, refine={placement_meta.get('refine_count', 0)})"
+            )
+        if not add_watermark(original_path, watermarked_path, author, banner_y=banner_y):
             result["error"] = "Watermarking failed"
             thread_print(f"   [{tiktok_id}] Watermarking failed")
             return result
@@ -371,9 +505,25 @@ def process_video(video: dict, index: int) -> dict:
         logod_mux_asset_id = mux_result.get("data", {}).get("id")
         thread_print(f"   [{tiktok_id}] Logod Mux Asset: {logod_mux_asset_id}")
         
-        # Save to DB
-        db_record = save_logod_video(video_id, mux_result, duration, watermarked_size)
-        thread_print(f"   [{tiktok_id}] Saved to DB: {db_record['id']}")
+        # Save or update DB
+        if existing_logod_id:
+            update_logod_video_record(
+                existing_logod_id,
+                mux_result,
+                duration,
+                watermarked_size,
+                placement_meta.get("banner_position_fraction"),
+            )
+            thread_print(f"   [{tiktok_id}] Updated logod row {existing_logod_id}")
+        else:
+            db_record = save_logod_video(
+                video_id,
+                mux_result,
+                duration,
+                watermarked_size,
+                banner_position_fraction=placement_meta.get("banner_position_fraction"),
+            )
+            thread_print(f"   [{tiktok_id}] Saved to DB: {db_record['id']}")
         
         result["success"] = True
         
@@ -389,22 +539,30 @@ def process_video(video: dict, index: int) -> dict:
     return result
 
 
-def main(max_workers: int = 2):
-    """Process all videos without logod versions."""
-    videos = get_videos_without_logod()
-    print(f"Found {len(videos)} videos without logod versions\n")
-    
-    if not videos:
+def main(max_workers: int = 2, rebackfill_all: bool = False):
+    """Process videos without logod, or re-build every existing logod row."""
+    if rebackfill_all:
+        pairs = get_videos_for_logod_rebackfill()
+        print(f"Re-backfill: {len(pairs)} logod row(s) (Mux → TikTok, new placement, update DB)\n")
+        work_list: list[tuple[dict, int, str | None]] = [
+            (video, i, logod_id) for i, (video, logod_id) in enumerate(pairs, 1)
+        ]
+    else:
+        videos = get_videos_without_logod()
+        print(f"Found {len(videos)} videos without logod versions\n")
+        work_list = [(v, i, None) for i, v in enumerate(videos, 1)]
+
+    if not work_list:
         print("Nothing to process!")
         return
-    
+
     total_success = 0
     total_failed = 0
-    
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(process_video, video, i): video["id"]
-            for i, video in enumerate(videos, 1)
+            executor.submit(process_video, video, i, logod_id): video["id"]
+            for video, i, logod_id in work_list
         }
         
         for future in as_completed(futures):
@@ -425,4 +583,11 @@ def main(max_workers: int = 2):
 
 
 if __name__ == "__main__":
-    main(max_workers=2)
+    import sys
+
+    rebackfill_all = "--rebackfill-all" in sys.argv
+    max_workers = 1 if rebackfill_all else 2
+    for arg in sys.argv:
+        if arg.startswith("--workers="):
+            max_workers = max(1, int(arg.partition("=")[2]))
+    main(max_workers=max_workers, rebackfill_all=rebackfill_all)

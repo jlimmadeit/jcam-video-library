@@ -23,6 +23,8 @@ from dotenv import load_dotenv
 from google import genai
 from supabase import create_client, Client
 
+from banner_placement import compute_banner_y_for_logod_video
+
 load_dotenv()
 
 RAPID_API_KEY = os.getenv("RAPID_API_KEY")
@@ -38,7 +40,7 @@ TIKTOK_MAX_QUALITY_HOST = "tiktok-max-quality.p.rapidapi.com"
 TIKTOK_MAX_QUALITY_URL = f"https://{TIKTOK_MAX_QUALITY_HOST}/download"
 
 # Watermark settings
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "jcam-logo.png")
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "j cam logo black.png")
 WATERMARK_BANNER_HEIGHT = 100
 WATERMARK_BANNER_POSITION = 5 / 7  # 5/7 down the video
 WATERMARK_PADDING = 105
@@ -289,14 +291,24 @@ def download_video(url: str, video_id: str) -> str | None:
         return None, str(e)
 
 
-def add_watermark(input_path: str, output_path: str, author_username: str) -> bool:
+def add_watermark(
+    input_path: str,
+    output_path: str,
+    author_username: str,
+    banner_y: int | None = None,
+) -> bool:
     """
-    Add j.cam watermark banner to video.
-    Scales video to 1080x1920, adds white banner at 5/7 down with logo and URL.
+    Add j.cam watermark banner to video (same ffmpeg layout as backfill_logod_videos.add_watermark).
+    Scales/pads to 1080×1920. ``banner_y`` should come from
+    ``banner_placement.compute_banner_y_for_logod_video`` when producing logod assets.
+    If ``banner_y`` is None, uses WATERMARK_BANNER_POSITION (clamped to frame).
     """
-    banner_y = int(WATERMARK_TARGET_HEIGHT * WATERMARK_BANNER_POSITION)
+    if banner_y is None:
+        banner_y = int(WATERMARK_TARGET_HEIGHT * WATERMARK_BANNER_POSITION)
+    max_y = WATERMARK_TARGET_HEIGHT - WATERMARK_BANNER_HEIGHT
+    banner_y = max(0, min(int(banner_y), max_y))
     logo_height = WATERMARK_BANNER_HEIGHT - 20
-    url_text = f"J.CAM/{author_username.upper()}"
+    url_text = f"jcam.app/{author_username.upper()}"
     
     filter_complex = (
         f"[0:v]scale={WATERMARK_TARGET_WIDTH}:{WATERMARK_TARGET_HEIGHT}:force_original_aspect_ratio=decrease,"
@@ -465,12 +477,24 @@ def save_to_supabase(video: dict, keyword: str, category: str, mux_data: dict, u
     return response.data[0] if response.data else None
 
 
-def save_logod_video_to_supabase(video_db_id: str, mux_data: dict, duration: float = None, file_size: int = None) -> dict:
-    """Save watermarked video record to Supabase logod_videos table."""
+def save_logod_video_to_supabase(
+    video_db_id: str,
+    mux_data: dict,
+    duration: float = None,
+    file_size: int = None,
+    banner_position_fraction: float | None = None,
+) -> dict:
+    """Insert logod_videos row (schema aligned with backfill_logod_videos.save_logod_video)."""
     supabase = get_supabase()
     mux_asset = mux_data.get("data", {})
     playback_ids = mux_asset.get("playback_ids", [])
     playback_id = playback_ids[0]["id"] if playback_ids else None
+
+    bp = (
+        banner_position_fraction
+        if banner_position_fraction is not None
+        else WATERMARK_BANNER_POSITION
+    )
 
     record = {
         "video_id": video_db_id,
@@ -479,7 +503,7 @@ def save_logod_video_to_supabase(video_db_id: str, mux_data: dict, duration: flo
         "mux_status": mux_asset.get("status"),
         "watermark_type": "jcam_banner",
         "banner_height": WATERMARK_BANNER_HEIGHT,
-        "banner_position": round(WATERMARK_BANNER_POSITION, 3),
+        "banner_position": round(bp, 4),
         "logo_padding": WATERMARK_PADDING,
         "width": WATERMARK_TARGET_WIDTH,
         "height": WATERMARK_TARGET_HEIGHT,
@@ -774,8 +798,22 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
             temp_dir = tempfile.gettempdir()
             watermarked_path = os.path.join(temp_dir, f"tiktok_{video_id}_logod.mp4")
             
-            thread_print(f"   [{video_id}] Creating watermarked version...")
-            if add_watermark(local_path, watermarked_path, author):
+            thread_print(f"   [{video_id}] Creating watermarked version (banner_placement + ffmpeg)…")
+            banner_y, placement_meta = compute_banner_y_for_logod_video(
+                local_path, log_prefix=video_id
+            )
+            if placement_meta.get("gemini_error"):
+                thread_print(
+                    f"   [{video_id}] Banner Gemini: {placement_meta['gemini_error']} (using default slot if needed)"
+                )
+            else:
+                regs = placement_meta.get("regions", [])
+                ncap = sum(1 for r in regs if r.get("role") == "auto_caption")
+                nov = sum(1 for r in regs if r.get("role") == "creator_overlay")
+                thread_print(
+                    f"   [{video_id}] Banner placement: y={banner_y} (auto_caption={ncap}, creator_overlay={nov}, refine={placement_meta.get('refine_count', 0)})"
+                )
+            if add_watermark(local_path, watermarked_path, author, banner_y=banner_y):
                 # Original no longer needed after watermarking
                 if local_path and os.path.exists(local_path):
                     os.remove(local_path)
@@ -804,6 +842,7 @@ def process_single_video(video: dict, keyword: str, category: str, is_existing: 
                     logod_mux_result,
                     duration=video.get("duration"),
                     file_size=watermarked_size,
+                    banner_position_fraction=placement_meta.get("banner_position_fraction"),
                 )
                 thread_print(f"   [{video_id}] Logod saved to DB: {logod_db_record['id']}")
                 
