@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>j.cam Video Library</title>
+    <title>j.cam — FPS Video Library</title>
     <link rel="preconnect" href="https://stream.mux.com" crossorigin>
     <link rel="preconnect" href="https://image.mux.com" crossorigin>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -128,7 +128,13 @@
 
         @media (min-width: 720px) {
             .filters-grid {
-                grid-template-columns: repeat(4, minmax(0, 1fr));
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+        }
+
+        @media (min-width: 960px) {
+            .filters-grid {
+                grid-template-columns: repeat(5, minmax(0, 1fr));
             }
         }
 
@@ -864,7 +870,7 @@
     <div class="container">
         <header>
             <img src="j%20cam%20logo%20white.png" alt="jcam.app" class="logo">
-            <h2>Video Library</h2>
+            <h2>FPS Video Library</h2>
         </header>
 
         <div class="library-controls-sticky">
@@ -874,7 +880,7 @@
                         <circle cx="11" cy="11" r="8"></circle>
                         <path d="m21 21-4.35-4.35"></path>
                     </svg>
-                    <input type="text" class="search-input" id="searchInput" placeholder="Search by description, keyword, category, or hashtag...">
+                    <input type="text" class="search-input" id="searchInput" placeholder="Search by description, keyword, or hashtag…">
                 </div>
                 <div class="filters-panel">
                     <div class="filters-panel-head">
@@ -894,12 +900,6 @@
                         </div>
                     </div>
                     <div class="filters-grid">
-                        <div class="filter-field">
-                            <label for="filterCategory">Category</label>
-                            <select id="filterCategory" aria-label="Filter by category">
-                                <option value="">All categories</option>
-                            </select>
-                        </div>
                         <div class="filter-field">
                             <label for="filterDuration">Duration</label>
                             <select id="filterDuration" aria-label="Filter by video length">
@@ -928,6 +928,16 @@
                                 <option value="10k-100k">10K – 100K</option>
                                 <option value="100k-1m">100K – 1M</option>
                                 <option value="1mp">1M or more</option>
+                            </select>
+                        </div>
+                        <div class="filter-field">
+                            <label for="filterDownloads">Downloads</label>
+                            <select id="filterDownloads" aria-label="Filter by library download count">
+                                <option value="any">Any</option>
+                                <option value="eq0">Never (0)</option>
+                                <option value="1-4">1 – 4</option>
+                                <option value="5-19">5 – 19</option>
+                                <option value="20p">20 or more</option>
                             </select>
                         </div>
                     </div>
@@ -996,8 +1006,8 @@
         const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
         const VIDEO_PAGE_SIZE = 16;
-        /** Library buckets from ``keywords.csv``; always shown in the category filter. */
-        const CANONICAL_CATALOG_CATEGORIES = ['dating', 'lifestyle', 'comedy', 'sports'];
+        /** Site is scoped to this catalog bucket only (no category picker). */
+        const SITE_CATALOG_CATEGORY = 'fps';
 
         // List payload: omit long text fields (description, summary) — fetched when a video is opened.
         const VIDEO_LIST_SELECT = `
@@ -1050,6 +1060,8 @@
         let catalogObserver = null;
         let modalHls = null;
         let modalPlaybackAbort = null;
+        /** Lowercase category last loaded into ``allVideos`` via paginated catalog. */
+        let lastCatalogFetchCategoryKey = '\u0000';
         const ADMIN_EMAILS = ['limjoe25@gmail.com'];
 
         function escapeHtmlAttr(s) {
@@ -1082,8 +1094,75 @@
                 .neq('is_hidden', true);
         }
 
+        /** Category is applied in Postgres so pagination only loads matching rows. */
+        function videoListSelectForCatalog() {
+            const cat = (getCatalogFilterState().category || '').trim();
+            if (!cat) return VIDEO_LIST_SELECT;
+            return VIDEO_LIST_SELECT.replace('videos (', 'videos!inner (');
+        }
+
         function videoListQuery() {
-            return videoListQueryBase(VIDEO_LIST_SELECT).order('created_at', { ascending: false });
+            let q = videoListQueryBase(videoListSelectForCatalog()).order('created_at', { ascending: false });
+            const cat = (getCatalogFilterState().category || '').trim();
+            if (cat) q = q.ilike('videos.category', cat);
+            return q;
+        }
+
+        /** True when only category is set — server pages match the filter; client can append cards per page. */
+        function catalogIsServerCategoryOnly() {
+            const f = getCatalogFilterState();
+            return (
+                Boolean(f.category) &&
+                f.duration === 'any' &&
+                f.engagement === 'all' &&
+                f.views === 'any' &&
+                f.downloads === 'any'
+            );
+        }
+
+        /**
+         * Refetch page 0 from Supabase for the current catalog filters (category in SQL).
+         * No-op while text search is active (search results are separate).
+         */
+        async function reloadCatalogFromServer() {
+            if (document.getElementById('searchInput').value.trim()) return;
+
+            disconnectCatalogObserver();
+            hasMoreCatalog = false;
+            catalogLoading = true;
+            const grid = document.getElementById('videoGrid');
+            grid.innerHTML = `
+                <div class="loading" style="grid-column: 1 / -1;">
+                    <div class="loading-spinner"></div>
+                    <p>Loading videos...</p>
+                </div>
+            `;
+            try {
+                const { data, error } = await withTimeout(
+                    videoListQuery().range(0, VIDEO_PAGE_SIZE - 1),
+                    60000,
+                    'Loading videos'
+                );
+                if (error) throw error;
+                allVideos = data || [];
+                hasMoreCatalog = allVideos.length === VIDEO_PAGE_SIZE;
+                lastCatalogFetchCategoryKey = (getCatalogFilterState().category || '').trim().toLowerCase();
+                renderVideos(catalogVideosForGrid());
+            } catch (err) {
+                console.error('reloadCatalogFromServer failed:', err);
+                allVideos = [];
+                hasMoreCatalog = false;
+                lastCatalogFetchCategoryKey = '\u0000';
+                disconnectCatalogObserver();
+                grid.innerHTML = `
+                    <div class="empty-state" style="grid-column: 1 / -1;">
+                        <p>Error loading videos: ${err.message}</p>
+                        <p style="font-size: 0.8rem; margin-top: 10px;">${err.hint || ''}</p>
+                    </div>
+                `;
+            } finally {
+                catalogLoading = false;
+            }
         }
 
         function withTimeout(promise, ms, label) {
@@ -1212,6 +1291,12 @@
             return String(Math.round(num));
         }
 
+        function formatCardDownloadCount(n) {
+            const num = Math.max(0, Math.floor(Number(n) || 0));
+            if (!Number.isFinite(num)) return '—';
+            return String(num);
+        }
+
         /** Engagement rate: (likes + comments + shares) / views. Returns null if undefined or views ≤ 0. */
         function engagementPercentFromVideoRow(v) {
             const views = Number(v?.tiktok_view_count);
@@ -1244,22 +1329,27 @@
 
         function getCatalogFilterState() {
             return {
-                category: (document.getElementById('filterCategory')?.value || '').trim(),
+                category: SITE_CATALOG_CATEGORY,
                 duration: document.getElementById('filterDuration')?.value || 'any',
                 engagement: document.getElementById('filterEngagement')?.value || 'all',
                 views: document.getElementById('filterViews')?.value || 'any',
+                downloads: document.getElementById('filterDownloads')?.value || 'any',
             };
         }
 
         function catalogFiltersAreDefault() {
             const f = getCatalogFilterState();
-            return !f.category && f.duration === 'any' && f.engagement === 'all' && f.views === 'any';
+            return (
+                f.duration === 'any' &&
+                f.engagement === 'all' &&
+                f.views === 'any' &&
+                f.downloads === 'any'
+            );
         }
 
         function activeFiltersSummary() {
             const f = getCatalogFilterState();
             const parts = [];
-            if (f.category) parts.push(categoryFilterOptionLabel(f.category));
             const durLabels = {
                 lt30: 'Under 30s',
                 '30-60': '30s–1m',
@@ -1279,6 +1369,11 @@
                 '1mp': '1M+ views',
             };
             if (f.views !== 'any') parts.push(viewLabels[f.views] || f.views);
+            const dlSel = document.getElementById('filterDownloads');
+            if (f.downloads !== 'any' && dlSel) {
+                const opt = dlSel.selectedOptions?.[0];
+                if (opt) parts.push(opt.textContent.trim());
+            }
             return parts.join(' · ');
         }
 
@@ -1305,12 +1400,21 @@
                 if (f.views === '100k-1m' && (views < 100_000 || views >= 1_000_000)) return false;
                 if (f.views === '1mp' && views < 1_000_000) return false;
             }
+            const dl = Math.max(0, Math.floor(Number(video.download_count) || 0));
+            if (f.downloads !== 'any') {
+                if (f.downloads === 'eq0' && dl !== 0) return false;
+                if (f.downloads === '1-4' && (dl < 1 || dl > 4)) return false;
+                if (f.downloads === '5-19' && (dl < 5 || dl > 19)) return false;
+                if (f.downloads === '20p' && dl < 20) return false;
+            }
             return true;
         }
 
         function applyCatalogFilters(videos) {
+            const q = (document.getElementById('searchInput')?.value || '').trim();
             const f = getCatalogFilterState();
-            if (catalogFiltersAreDefault()) return videos;
+            // Text/vector search can return rows outside this bucket; always run client filters then.
+            if (!q && catalogIsServerCategoryOnly() && catalogFiltersAreDefault()) return videos;
             return videos.filter((vid) => matchesCatalogFilters(vid, f));
         }
 
@@ -1318,58 +1422,15 @@
             return applyCatalogFilters(allVideos);
         }
 
-        function categoryFilterOptionLabel(key) {
-            return String(key || '')
-                .split(/[_\s]+/)
-                .filter(Boolean)
-                .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-                .join(' ');
-        }
-
-        function rebuildCategoryFilterOptions() {
-            const sel = document.getElementById('filterCategory');
-            if (!sel) return;
-            const prevLower = (sel.value || '').trim().toLowerCase();
-            const fromDb = new Set();
-            for (const row of allVideos) {
-                const c = (row.videos && row.videos.category && String(row.videos.category).trim()) || '';
-                if (c) fromDb.add(c.toLowerCase());
-            }
-            const seen = new Set();
-            const ordered = [];
-            for (const c of CANONICAL_CATALOG_CATEGORIES) {
-                const key = c.toLowerCase();
-                if (!seen.has(key)) {
-                    seen.add(key);
-                    ordered.push(key);
-                }
-            }
-            const extras = Array.from(fromDb)
-                .filter((k) => !seen.has(k))
-                .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-            for (const k of extras) {
-                seen.add(k);
-                ordered.push(k);
-            }
-            const opts = ['<option value="">All categories</option>'].concat(
-                ordered.map(
-                    (key) =>
-                        `<option value="${escapeHtmlAttr(key)}">${escapeHtmlAttr(categoryFilterOptionLabel(key))}</option>`
-                )
-            );
-            sel.innerHTML = opts.join('');
-            if (prevLower && ordered.some((x) => x === prevLower)) sel.value = prevLower;
-        }
-
         function clearCatalogFiltersUI() {
-            const cat = document.getElementById('filterCategory');
             const dur = document.getElementById('filterDuration');
             const eng = document.getElementById('filterEngagement');
             const vi = document.getElementById('filterViews');
-            if (cat) cat.value = '';
+            const dl = document.getElementById('filterDownloads');
             if (dur) dur.value = 'any';
             if (eng) eng.value = 'all';
             if (vi) vi.value = 'any';
+            if (dl) dl.value = 'any';
         }
 
         /** Fisher–Yates shuffle in place. */
@@ -1408,6 +1469,10 @@
                 '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
             const trendSvg =
                 '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>';
+            const dlCount = formatCardDownloadCount(video.download_count);
+            const dlLabel = escapeHtmlAttr(dlCount);
+            const downloadSvg =
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
             return `
                     <div class="video-card" data-id="${video.id}">
                         <img class="thumbnail" ${fetchPri}src="${thumb}" alt="${kw}" loading="lazy" decoding="async">
@@ -1420,6 +1485,7 @@
                                 <span class="stat" title="Duration">${clockSvg}<span>${durLabel}</span></span>
                                 <span class="stat" title="TikTok views">${eyeSvg}<span>${viewsLabel}</span></span>
                                 <span class="stat" title="Engagement: (likes + comments + shares) ÷ views">${trendSvg}<span>${engLabel}</span></span>
+                                <span class="stat" title="Downloads from this library">${downloadSvg}<span>${dlLabel}</span></span>
                             </div>
                         </div>
                         <div class="play-icon">
@@ -1471,10 +1537,11 @@
                 const cardIndexStart = allVideos.length;
                 allVideos.push(...rows);
                 hasMoreCatalog = rows.length === VIDEO_PAGE_SIZE;
-                rebuildCategoryFilterOptions();
 
                 const qCatalog = document.getElementById('searchInput').value.trim();
-                if (!qCatalog && !catalogFiltersAreDefault()) {
+                const incrementalCatalog =
+                    !qCatalog && (catalogFiltersAreDefault() || catalogIsServerCategoryOnly());
+                if (!incrementalCatalog && !qCatalog && !catalogFiltersAreDefault()) {
                     renderVideos(applyCatalogFilters(allVideos));
                     if (!hasMoreCatalog) {
                         document.getElementById('catalogSentinel')?.remove();
@@ -1711,47 +1778,8 @@
         // --- Videos ---
 
         async function loadVideos() {
-            disconnectCatalogObserver();
-            hasMoreCatalog = false;
-            catalogLoading = true;
-            const grid = document.getElementById('videoGrid');
-            grid.innerHTML = `
-                <div class="loading" style="grid-column: 1 / -1;">
-                    <div class="loading-spinner"></div>
-                    <p>Loading videos...</p>
-                </div>
-            `;
-            try {
-                const { data, error } = await withTimeout(
-                    videoListQuery().range(0, VIDEO_PAGE_SIZE - 1),
-                    60000,
-                    'Loading videos'
-                );
-                if (error) {
-                    console.error('Supabase error:', error);
-                    throw error;
-                }
-
-                allVideos = data || [];
-                hasMoreCatalog = allVideos.length === VIDEO_PAGE_SIZE;
-                console.log('Loaded first page:', allVideos.length, 'hasMore:', hasMoreCatalog);
-
-                rebuildCategoryFilterOptions();
-                renderVideos(catalogVideosForGrid());
-            } catch (err) {
-                console.error('loadVideos failed:', err);
-                allVideos = [];
-                hasMoreCatalog = false;
-                disconnectCatalogObserver();
-                grid.innerHTML = `
-                    <div class="empty-state" style="grid-column: 1 / -1;">
-                        <p>Error loading videos: ${err.message}</p>
-                        <p style="font-size: 0.8rem; margin-top: 10px;">${err.hint || ''}</p>
-                    </div>
-                `;
-            } finally {
-                catalogLoading = false;
-            }
+            console.log('loadVideos: initial catalog fetch');
+            await reloadCatalogFromServer();
         }
 
         function renderVideos(videos) {
@@ -1853,8 +1881,12 @@
             if (!term) return [];
             const pattern = sqlIlikePattern(term);
             const selectInner = VIDEO_LIST_SELECT.replace('videos (', 'videos!inner (');
-            const base = () =>
-                videoListQueryBase(selectInner).order('created_at', { ascending: false }).limit(500);
+            const base = () => {
+                let q = videoListQueryBase(selectInner).order('created_at', { ascending: false }).limit(500);
+                const cat = SITE_CATALOG_CATEGORY.trim();
+                if (cat) q = q.ilike('videos.category', cat);
+                return q;
+            };
 
             async function runIlike(column) {
                 try {
@@ -1937,6 +1969,7 @@
                     status: r.status,
                     video_id: r.video_id,
                     duration_seconds: r.duration_seconds,
+                    download_count: r.download_count,
                     similarity: r.similarity,
                     videos: {
                         tiktok_description: r.tiktok_description,
@@ -1969,7 +2002,9 @@
                 }
                 clearTimeout(searchTimeout);
                 searchRequestId++;
-                renderVideos(catalogVideosForGrid());
+                const curCat = (getCatalogFilterState().category || '').trim().toLowerCase();
+                if (curCat !== lastCatalogFetchCategoryKey) void reloadCatalogFromServer();
+                else renderVideos(catalogVideosForGrid());
                 return;
             }
 
@@ -2249,7 +2284,7 @@
             filterVideos(e.target.value);
         });
 
-        ['filterCategory', 'filterDuration', 'filterEngagement', 'filterViews'].forEach((id) => {
+        ['filterDuration', 'filterEngagement', 'filterViews', 'filterDownloads'].forEach((id) => {
             document.getElementById(id).addEventListener('change', () => {
                 const q = document.getElementById('searchInput').value.trim();
                 if (!q) renderVideos(catalogVideosForGrid());
@@ -2259,9 +2294,8 @@
 
         document.getElementById('filtersResetBtn').addEventListener('click', () => {
             clearCatalogFiltersUI();
-            rebuildCategoryFilterOptions();
             const q = document.getElementById('searchInput').value.trim();
-            if (!q) renderVideos(catalogVideosForGrid());
+            if (!q) void reloadCatalogFromServer();
             else filterVideos(q);
         });
 
